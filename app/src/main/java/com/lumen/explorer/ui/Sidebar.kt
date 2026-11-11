@@ -1,8 +1,9 @@
+@file:OptIn(ExperimentalFoundationApi::class)
+
 package com.lumen.explorer.ui
 
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -15,43 +16,40 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Apps
-import androidx.compose.material.icons.outlined.Archive
-import androidx.compose.material.icons.outlined.ChevronRight
-import androidx.compose.material.icons.outlined.CleaningServices
-import androidx.compose.material.icons.outlined.Computer
-import androidx.compose.material.icons.outlined.Delete
-import androidx.compose.material.icons.outlined.Description
-import androidx.compose.material.icons.outlined.ExpandMore
-import androidx.compose.material.icons.outlined.FileCopy
-import androidx.compose.material.icons.outlined.History
-import androidx.compose.material.icons.outlined.Home
-import androidx.compose.material.icons.outlined.Image
-import androidx.compose.material.icons.outlined.LibraryMusic
-import androidx.compose.material.icons.outlined.PhoneAndroid
-import androidx.compose.material.icons.outlined.PhotoLibrary
-import androidx.compose.material.icons.outlined.PieChart
-import androidx.compose.material.icons.outlined.PushPin
-import androidx.compose.material.icons.outlined.SdCard
-import androidx.compose.material.icons.outlined.Settings
-import androidx.compose.material.icons.outlined.Star
-import androidx.compose.material.icons.outlined.Storage
-import androidx.compose.material.icons.outlined.Usb
-import androidx.compose.material.icons.outlined.VideoLibrary
-import androidx.compose.material3.Icon
+import androidx.compose.material.icons.automirrored.filled.ViewList
+import androidx.compose.material.icons.filled.Android
+import androidx.compose.material.icons.filled.AudioFile
+import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.FolderZip
+import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.PhoneAndroid
+import androidx.compose.material.icons.filled.PhotoLibrary
+import androidx.compose.material.icons.filled.PieChart
+import androidx.compose.material.icons.filled.SdCard
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.TabletAndroid
+import androidx.compose.material.icons.filled.Usb
+import androidx.compose.material.icons.filled.VideoFile
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.snapshots.SnapshotStateMap
-import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -60,180 +58,183 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.material3.Icon
 import com.lumen.explorer.AppState
 import com.lumen.explorer.Cat
 import com.lumen.explorer.FileOps
 import com.lumen.explorer.Loc
+import com.lumen.explorer.Paths
+import com.lumen.explorer.Perms
 import com.lumen.explorer.Settings
+import com.lumen.explorer.VolKind
 import com.lumen.explorer.Volume
 import com.lumen.explorer.Volumes
-import com.lumen.explorer.fmtSize
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.io.File
 
-/** Lazily loaded folder tree for "This device". */
-object FolderTree {
-    val expanded: SnapshotStateMap<String, Boolean> = mutableStateMapOf()
-    val children: SnapshotStateMap<String, List<String>> = mutableStateMapOf()
-    private val loading = HashSet<String>()
+fun catIcon(c: Cat): ImageVector = when (c) {
+    Cat.IMAGES -> Icons.Filled.Image
+    Cat.VIDEOS -> Icons.Filled.VideoFile
+    Cat.AUDIO -> Icons.Filled.AudioFile
+    Cat.DOCUMENTS -> Icons.Filled.Description
+    Cat.ARCHIVES -> Icons.Filled.FolderZip
+    Cat.APPS -> Icons.Filled.Android
+}
 
-    fun load(path: String, force: Boolean = false) {
-        if (!force && children.containsKey(path)) return
-        synchronized(loading) { if (!loading.add(path)) return }
-        val hidden = Settings.showHidden
-        AppState.io {
-            val kids = FileOps.list(path, hidden)?.filter { it.isDir }?.sortedBy { it.name.lowercase() }?.map { it.path } ?: emptyList()
-            AppState.onMain { children[path] = kids; synchronized(loading) { loading.remove(path) } }
+fun catColor(c: Cat): Color = when (c) {
+    Cat.IMAGES -> Color(0xFF1FA463)
+    Cat.VIDEOS -> Color(0xFF8E54E9)
+    Cat.AUDIO -> Color(0xFFF2711C)
+    Cat.DOCUMENTS -> Color(0xFF2B6FDB)
+    Cat.ARCHIVES -> Color(0xFFB8860B)
+    Cat.APPS -> Color(0xFF3DDC84)
+}
+
+fun volumeIcon(v: Volume): ImageVector = when (v.kind) {
+    VolKind.INTERNAL -> Icons.Filled.PhoneAndroid
+    VolKind.SD -> Icons.Filled.SdCard
+    VolKind.USB -> Icons.Filled.Usb
+}
+
+@Composable
+private fun SideItem(icon: ImageVector, label: String, selected: Boolean, onClick: () -> Unit, indent: Int = 0, tint: Color? = null, onLong: (() -> Unit)? = null, trailing: (@Composable () -> Unit)? = null) {
+    val c = Win.c
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 1.dp).clip(RoundedCornerShape(8.dp))
+            .background(if (selected) c.accentSoft else Color.Transparent)
+            .combinedClickable(onClick = onClick, onLongClick = onLong)
+            .padding(start = (10 + indent * 16).dp, end = 6.dp).height(44.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(icon, null, tint = tint ?: if (selected) c.accent else c.text2, modifier = Modifier.size(22.dp))
+        Spacer(Modifier.width(14.dp))
+        Txt(label, 14.sp, if (selected) FontWeight.SemiBold else FontWeight.Normal, c.text, Modifier.weight(1f))
+        if (trailing != null) trailing()
+    }
+}
+
+@Composable
+private fun SideHeader(text: String) {
+    Txt(text.uppercase(), 11.sp, FontWeight.SemiBold, Win.c.text2, Modifier.padding(start = 18.dp, top = 14.dp, bottom = 4.dp), maxLines = 1)
+}
+
+@Composable
+private fun MiniUsage(v: Volume, modifier: Modifier = Modifier) {
+    val c = Win.c
+    Column(modifier.padding(start = 56.dp, end = 18.dp, bottom = 6.dp)) {
+        Box(Modifier.fillMaxWidth().height(4.dp).clip(RoundedCornerShape(2.dp)).background(c.hover)) {
+            Box(Modifier.fillMaxWidth(v.fraction).fillMaxHeight().background(if (v.fraction > 0.9f) c.danger else c.accent))
+        }
+        Txt("${com.lumen.explorer.fmtSize(v.free)} free of ${com.lumen.explorer.fmtSize(v.total)}", 11.sp, color = c.text2)
+    }
+}
+
+/** Lazy folder tree: children are listed only when a node is expanded. */
+@Composable
+private fun FolderTree(path: String, depth: Int, current: String?, expanded: MutableMap<String, Boolean>, onNavigate: () -> Unit) {
+    val open = expanded[path] == true
+    val kids by produceState<List<String>>(emptyList(), path, open, Settings.s.showHidden, Perms.tick) {
+        value = if (!open) emptyList() else withContext(Dispatchers.IO) {
+            (File(path).listFiles { f -> f.isDirectory && (Settings.s.showHidden || !f.name.startsWith(".")) } ?: emptyArray())
+                .map { it.absolutePath }.sortedWith { a, b -> com.lumen.explorer.naturalCompare(Paths.name(a), Paths.name(b)) }
         }
     }
-
-    fun toggle(path: String) {
-        val now = expanded[path] != true
-        expanded[path] = now
-        if (now) load(path)
-    }
-
-    fun expandTo(path: String, vols: List<Volume>) {
-        val root = Volumes.rootOf(path, vols)
-        if (!Paths_isInside(path, root)) return
-        var cur = root
-        expanded[cur] = true; load(cur)
-        val rel = path.removePrefix(root).split('/').filter { it.isNotEmpty() }
-        for (seg in rel.dropLast(1)) { cur = "$cur/$seg"; expanded[cur] = true; load(cur) }
-    }
-
-    private fun Paths_isInside(child: String, parent: String) = com.lumen.explorer.Paths.isInside(child, parent)
+    SideItem(
+        Icons.Filled.Folder, Paths.name(path), current == path,
+        onClick = { AppState.goDir(path); onNavigate() }, indent = depth, tint = Color(0xFFF2B01E),
+        trailing = {
+            Box(Modifier.size(32.dp).clip(RoundedCornerShape(16.dp)).combinedClickable(onClick = { expanded[path] = !open }), contentAlignment = Alignment.Center) {
+                Icon(if (open) Icons.Filled.ExpandMore else Icons.Filled.ChevronRight, null, tint = Win.c.text2, modifier = Modifier.size(18.dp))
+            }
+        }
+    )
+    if (open) kids.forEach { k -> FolderTree(k, depth + 1, current, expanded, onNavigate) }
 }
 
-private sealed class SideNode {
-    class Row(val key: String, val icon: ImageVector?, val label: String, val loc: Loc?, val indent: Int = 0, val glyphFolder: Boolean = false, val chevronPath: String? = null, val volume: Volume? = null, val pinPath: String? = null) : SideNode()
-    class Header(val text: String) : SideNode()
-    object Spacer : SideNode()
-}
-
-private fun catIcon(c: Cat): ImageVector = when (c) {
-    Cat.IMAGES -> Icons.Outlined.Image; Cat.VIDEOS -> Icons.Outlined.VideoLibrary; Cat.AUDIO -> Icons.Outlined.LibraryMusic
-    Cat.DOCUMENTS -> Icons.Outlined.Description; Cat.ARCHIVES -> Icons.Outlined.Archive; Cat.APPS -> Icons.Outlined.Apps
-}
-
-fun locIcon(loc: Loc): ImageVector = when (loc) {
-    Loc.Home -> Icons.Outlined.Home; Loc.Gallery -> Icons.Outlined.PhotoLibrary; Loc.Device -> Icons.Outlined.Computer
-    is Loc.Category -> catIcon(loc.cat); Loc.Recent -> Icons.Outlined.History; Loc.Favorites -> Icons.Outlined.Star
-    Loc.Bin -> Icons.Outlined.Delete; Loc.Large -> Icons.Outlined.Storage; Loc.Duplicates -> Icons.Outlined.FileCopy
-    Loc.Analyzer -> Icons.Outlined.PieChart; is Loc.Search -> Icons.Outlined.History; is Loc.Dir -> Icons.Outlined.Home
-}
-
-fun volumeIcon(v: Volume): ImageVector = if (v.primary) Icons.Outlined.PhoneAndroid else if (v.label.contains("USB", true)) Icons.Outlined.Usb else Icons.Outlined.SdCard
-
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun Sidebar(modifier: Modifier = Modifier, showBrand: Boolean = false) {
+fun Sidebar(onNavigate: () -> Unit, modifier: Modifier = Modifier) {
+    val c = Win.c
     val tab = AppState.tab
-    val vols = AppState.volumes
-    val cur = tab.loc
-    val curPath = (cur as? Loc.Dir)?.path
+    val loc = tab.loc
+    val s = Settings.s
+    val expanded = remember { mutableStateMapOf<String, Boolean>() }
+    val currentDir = (loc as? Loc.Dir)?.path
+    fun nav(l: Loc) { AppState.go(l); onNavigate() }
 
-    LaunchedEffect(curPath, vols) { if (curPath != null) FolderTree.expandTo(curPath, vols) }
-
-    val nodes = ArrayList<SideNode>()
-    nodes.add(SideNode.Row("home", Icons.Outlined.Home, "Home", Loc.Home))
-    nodes.add(SideNode.Row("gallery", Icons.Outlined.PhotoLibrary, "Gallery", Loc.Gallery))
-    nodes.add(SideNode.Row("recent", Icons.Outlined.History, "Recent files", Loc.Recent))
-    nodes.add(SideNode.Row("fav", Icons.Outlined.Star, "Favorites", Loc.Favorites))
-    nodes.add(SideNode.Header("Quick access"))
-    for (p in Settings.pinned) if (File(p).isDirectory) nodes.add(SideNode.Row("pin:$p", null, Paths_name(p), Loc.Dir(p), glyphFolder = true, pinPath = p))
-    nodes.add(SideNode.Header("This device"))
-    nodes.add(SideNode.Row("device", Icons.Outlined.Computer, "This device", Loc.Device))
-    fun addTree(path: String, depth: Int) {
-        if (FolderTree.expanded[path] != true) return
-        for (k in FolderTree.children[path] ?: emptyList()) {
-            nodes.add(SideNode.Row("t:$k", null, Paths_name(k), Loc.Dir(k), indent = depth, glyphFolder = true, chevronPath = k))
-            addTree(k, depth + 1)
+    val internalRoot = Volumes.internal?.root ?: android.os.Environment.getExternalStorageDirectory().absolutePath
+    val quick by produceState<List<String>>(emptyList(), internalRoot, s.pinned, Perms.tick) {
+        value = withContext(Dispatchers.IO) {
+            val defaults = listOf("Download", "DCIM", "Pictures", "Documents", "Movies", "Music").map { Paths.join(internalRoot, it) }.filter { File(it).isDirectory }
+            (defaults + s.pinned.filter { it !in defaults && File(it).isDirectory })
         }
     }
-    for (v in vols) {
-        nodes.add(SideNode.Row("v:${v.path}", volumeIcon(v), v.label, Loc.Dir(v.path), indent = 1, chevronPath = v.path, volume = v))
-        addTree(v.path, 2)
-    }
-    nodes.add(SideNode.Header("Categories"))
-    for (c in Cat.values()) nodes.add(SideNode.Row("cat:${c.name}", catIcon(c), c.title, Loc.Category(c)))
-    nodes.add(SideNode.Row("bin", Icons.Outlined.Delete, "Recycle Bin", Loc.Bin))
-    nodes.add(SideNode.Header("Tools"))
-    nodes.add(SideNode.Row("analyzer", Icons.Outlined.PieChart, "Storage analyzer", Loc.Analyzer))
-    nodes.add(SideNode.Row("large", Icons.Outlined.Storage, "Large files", Loc.Large))
-    nodes.add(SideNode.Row("dupes", Icons.Outlined.FileCopy, "Duplicate finder", Loc.Duplicates))
 
-    Column(modifier.background(Win.c.bg)) {
-        if (showBrand) {
-            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp), verticalAlignment = Alignment.CenterVertically) {
-                AppLogo(32.dp); Spacer(Modifier.width(12.dp))
-                Txt("Lumen Explorer", size = 18.sp, weight = FontWeight.SemiBold)
-            }
-        }
-        LazyColumn(Modifier.weight(1f), state = rememberLazyListState()) {
-            items(nodes, key = { when (it) { is SideNode.Row -> it.key; is SideNode.Header -> "h:" + it.text; SideNode.Spacer -> "sp" } }) { n ->
-                when (n) {
-                    is SideNode.Header -> Txt(n.text, Modifier.padding(start = 16.dp, top = 14.dp, bottom = 4.dp), 12.sp, Win.c.textDim, FontWeight.SemiBold)
-                    is SideNode.Row -> SideRow(n, selected = n.loc == cur)
-                    SideNode.Spacer -> Spacer(Modifier.height(8.dp))
-                }
-            }
-        }
-        HDivider()
-        SideRow(SideNode.Row("settings", Icons.Outlined.Settings, "Settings", null), selected = false, onClickOverride = { AppState.drawer = false; AppState.settingsOpen = true })
-        Spacer(Modifier.height(4.dp))
-    }
-}
-
-private fun Paths_name(p: String) = com.lumen.explorer.Paths.name(p)
-
-@OptIn(ExperimentalFoundationApi::class)
-@Composable
-private fun SideRow(n: SideNode.Row, selected: Boolean, onClickOverride: (() -> Unit)? = null) {
-    var menu by remember { mutableStateOf(false) }
-    val expanded = n.chevronPath?.let { FolderTree.expanded[it] == true } ?: false
-    val v = n.volume
-    Box {
-        Row(
-            Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 1.dp).clip(RoundedCornerShape(6.dp))
-                .background(if (selected) Win.c.selected else Color.Transparent)
-                .combinedClickable(
-                    onClick = { if (onClickOverride != null) onClickOverride() else n.loc?.let { AppState.go(it) } },
-                    onLongClick = { if (n.pinPath != null || n.loc is Loc.Dir) menu = true },
-                )
-                .height(if (v != null) 52.dp else 40.dp).padding(start = (n.indent * 14).dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Box(Modifier.width(4.dp).height(16.dp).clip(RoundedCornerShape(2.dp)).background(if (selected) Win.c.accent else Color.Transparent))
-            if (n.chevronPath != null) {
-                Box(Modifier.size(28.dp).clickable { FolderTree.toggle(n.chevronPath) }, contentAlignment = Alignment.Center) {
-                    Icon(if (expanded) Icons.Outlined.ExpandMore else Icons.Outlined.ChevronRight, null, tint = Win.c.textDim, modifier = Modifier.size(18.dp))
-                }
-            } else Spacer(Modifier.width(if (n.indent > 0) 28.dp else 8.dp))
-            if (n.glyphFolder) FolderGlyph(22.dp) else Icon(n.icon!!, null, tint = if (selected) Win.c.accent else Win.c.text, modifier = Modifier.size(22.dp))
+    Column(modifier.fillMaxHeight().background(c.surface).verticalScroll(rememberScrollState()).padding(bottom = 12.dp)) {
+        Row(Modifier.padding(start = 16.dp, top = 14.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+            AppLogo(34.dp)
             Spacer(Modifier.width(12.dp))
-            Column(Modifier.weight(1f)) {
-                Txt(n.label, size = 14.sp, weight = if (selected) FontWeight.SemiBold else null)
-                if (v != null && v.total > 0) {
-                    Spacer(Modifier.height(3.dp))
-                    Box(Modifier.fillMaxWidth().padding(end = 10.dp).height(4.dp).clip(RoundedCornerShape(2.dp)).background(Win.c.stroke)) {
-                        Box(Modifier.fillMaxWidth((v.used.toFloat() / v.total).coerceIn(0f, 1f)).fillMaxHeight().background(if (v.used > v.total * 0.9) Win.c.danger else Win.c.accent))
+            Column {
+                Txt("Lumen Explorer", 16.sp, FontWeight.Bold)
+                Txt(Volumes.deviceName(), 11.sp, color = c.text2)
+            }
+        }
+        SideItem(Icons.Filled.Home, "Home", loc === Loc.Home, { nav(Loc.Home) })
+        SideItem(Icons.Filled.PhotoLibrary, "Gallery", loc === Loc.Gallery, { nav(Loc.Gallery) })
+        SideItem(Icons.Filled.History, "Recent", loc === Loc.Recent, { nav(Loc.Recent) })
+        SideItem(Icons.Filled.Star, "Favorites", loc === Loc.Favorites, { nav(Loc.Favorites) }, tint = Color(0xFFF2B01E))
+
+        if (quick.isNotEmpty()) {
+            SideHeader("Quick access")
+            quick.forEach { p ->
+                val pinned = p in s.pinned
+                SideItem(
+                    Icons.Filled.Folder, Paths.name(p), currentDir == p,
+                    { nav(Loc.Dir(p)) }, tint = Color(0xFFF2B01E),
+                    onLong = if (pinned) ({ Settings.togglePinned(p); AppState.toast("Removed from Quick access") }) else null
+                )
+            }
+        }
+
+        SideHeader("This device")
+        SideItem(Icons.Filled.PhoneAndroid, Volumes.deviceName(), loc === Loc.Device, { nav(Loc.Device) })
+        // Only storage that is actually present is listed — no SD card, no entry.
+        Volumes.list.forEach { v ->
+            val isOpen = expanded[v.root] == true
+            SideItem(
+                volumeIcon(v), v.label, currentDir == v.root, { nav(Loc.Dir(v.root)) }, indent = 1,
+                trailing = {
+                    Box(Modifier.size(32.dp).clip(RoundedCornerShape(16.dp)).combinedClickable(onClick = { expanded[v.root] = !isOpen }), contentAlignment = Alignment.Center) {
+                        Icon(if (isOpen) Icons.Filled.ExpandMore else Icons.Filled.ChevronRight, null, tint = c.text2, modifier = Modifier.size(18.dp))
                     }
-                    Txt("${fmtSize(v.free)} free of ${fmtSize(v.total)}", size = 10.sp, color = Win.c.textDim)
                 }
-            }
-            if (n.pinPath != null) Icon(Icons.Outlined.PushPin, null, tint = Win.c.textDim, modifier = Modifier.padding(end = 10.dp).size(14.dp))
-        }
-        if (menu) {
-            val p = n.pinPath ?: (n.loc as? Loc.Dir)?.path
-            if (p != null) {
-                androidx.compose.material3.DropdownMenu(expanded = true, onDismissRequest = { menu = false }, modifier = Modifier.background(Win.c.card)) {
-                    androidx.compose.material3.DropdownMenuItem(text = { Txt("Open in new tab") }, onClick = { menu = false; AppState.drawer = false; AppState.newTab(Loc.Dir(p)) })
-                    androidx.compose.material3.DropdownMenuItem(
-                        text = { Txt(if (Settings.isPinned(p)) "Unpin from Quick access" else "Pin to Quick access") },
-                        onClick = { menu = false; Settings.togglePinned(p) },
-                    )
+            )
+            MiniUsage(v)
+            if (isOpen) {
+                val kids by produceState<List<String>>(emptyList(), v.root, s.showHidden) {
+                    value = withContext(Dispatchers.IO) {
+                        (File(v.root).listFiles { f -> f.isDirectory && (Settings.s.showHidden || !f.name.startsWith(".")) } ?: emptyArray())
+                            .map { it.absolutePath }.sortedWith { a, b -> com.lumen.explorer.naturalCompare(Paths.name(a), Paths.name(b)) }
+                    }
                 }
+                kids.forEach { FolderTree(it, 2, currentDir, expanded, onNavigate) }
             }
         }
+        Volumes.usb.forEach { d ->
+            SideItem(Icons.Filled.TabletAndroid, d.name, false, { nav(Loc.Device) }, indent = 1)
+        }
+
+        SideHeader("Categories")
+        Cat.values().forEach { cat ->
+            SideItem(catIcon(cat), cat.label, loc == Loc.Category(cat), { nav(Loc.Category(cat)) }, tint = catColor(cat))
+        }
+
+        SideHeader("More")
+        SideItem(Icons.Filled.Delete, "Recycle Bin", loc === Loc.Bin, { nav(Loc.Bin) })
+        SideItem(Icons.Filled.PieChart, "Storage analyzer", loc === Loc.Analyzer, { nav(Loc.Analyzer) })
+        SideItem(Icons.AutoMirrored.Filled.ViewList, "Large files", loc === Loc.Large, { nav(Loc.Large) })
+        SideItem(Icons.Filled.ContentCopy, "Duplicate finder", loc === Loc.Dupes, { nav(Loc.Dupes) })
+        SideItem(Icons.Filled.Lock, "SecureVault (web)", loc === Loc.WebVault, { nav(Loc.WebVault) })
+        SideItem(Icons.Filled.Settings, "Settings", false, { AppState.showSettings = true; onNavigate() })
     }
 }

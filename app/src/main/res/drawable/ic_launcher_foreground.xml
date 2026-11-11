@@ -1,19 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Amber folder whose front carries a 2x2 "window pane" grid. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
-    android:width="108dp" android:height="108dp"
-    android:viewportWidth="108" android:viewportHeight="108">
-    <!-- folder back + tab -->
-    <path
-        android:fillColor="#FFE39A1B"
-        android:pathData="M31,33 h14 l5,6 h27 a4,4 0 0 1 4,4 v30 a4,4 0 0 1 -4,4 h-46 a4,4 0 0 1 -4,-4 v-36 a4,4 0 0 1 4,-4 z" />
+    android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
+    <!-- folder back -->
+    <path android:fillColor="#FFD667"
+        android:pathData="M28,38 Q28,34 32,34 L47,34 L53,41 L76,41 Q80,41 80,45 L80,50 L28,50 Z" />
     <!-- folder front -->
-    <path
-        android:fillColor="#FFFFC83D"
-        android:pathData="M27,46 h54 v27 a4,4 0 0 1 -4,4 h-46 a4,4 0 0 1 -4,-4 z" />
-    <!-- window panes -->
-    <path android:fillColor="#F2FFFFFF" android:pathData="M42,51 h11 v10 h-11 z" />
-    <path android:fillColor="#F2FFFFFF" android:pathData="M55,51 h11 v10 h-11 z" />
-    <path android:fillColor="#F2FFFFFF" android:pathData="M42,63 h11 v10 h-11 z" />
-    <path android:fillColor="#F2FFFFFF" android:pathData="M55,63 h11 v10 h-11 z" />
+    <path android:fillColor="#FFFFFF"
+        android:pathData="M26,48 Q26,45 29,45 L79,45 Q82,45 82,48 L82,72 Q82,76 78,76 L30,76 Q26,76 26,72 Z" />
+    <!-- lumen spark -->
+    <path android:fillColor="#1E88FF"
+        android:pathData="M54,52 L56.2,58.6 L63,60 L56.2,61.4 L54,68 L51.8,61.4 L45,60 L51.8,58.6 Z" />
 </vector>

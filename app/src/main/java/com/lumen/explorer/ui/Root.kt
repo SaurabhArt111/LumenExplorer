@@ -1,19 +1,12 @@
+@file:OptIn(ExperimentalMaterial3Api::class)
+
 package com.lumen.explorer.ui
 
-import android.graphics.Color as AColor
-import androidx.activity.ComponentActivity
-import androidx.activity.SystemBarStyle
 import androidx.activity.compose.BackHandler
-import androidx.activity.enableEdgeToEdge
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInHorizontally
-import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
-import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -23,29 +16,33 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.systemBarsPadding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Close
-import androidx.compose.material.icons.outlined.GridView
-import androidx.compose.material.icons.outlined.History
-import androidx.compose.material.icons.outlined.ViewList
-import androidx.compose.material3.Icon
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material3.DrawerValue
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.ModalDrawerSheet
+import androidx.compose.material3.ModalNavigationDrawer
+import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.input.key.Key
@@ -55,233 +52,220 @@ import androidx.compose.ui.input.key.isCtrlPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.type
-import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.view.WindowCompat
 import com.lumen.explorer.AppState
-import com.lumen.explorer.Dialog
+import com.lumen.explorer.Dlg
+import com.lumen.explorer.JobState
 import com.lumen.explorer.Loc
 import com.lumen.explorer.Ops
 import com.lumen.explorer.Perms
 import com.lumen.explorer.Settings
-import com.lumen.explorer.Tab
-import com.lumen.explorer.ViewMode
-import com.lumen.explorer.Volumes
-import com.lumen.explorer.fmtSize
+import com.lumen.explorer.isListing
+import com.lumen.explorer.itemsLabel
 import kotlinx.coroutines.delay
-import java.io.File
+import kotlinx.coroutines.launch
 
 @Composable
-fun LumenRoot(activity: ComponentActivity) {
-    // "Text size of everything": scale dp (uiScale) and sp (textScale) on top of the system values.
-    val base = LocalDensity.current
-    val dens = Density(base.density * Settings.uiScale, base.fontScale * Settings.textScale)
-    CompositionLocalProvider(LocalDensity provides dens) {
-        LumenTheme {
-            val dark = isDarkTheme()
-            LaunchedEffect(dark) {
-                activity.enableEdgeToEdge(
-                    statusBarStyle = SystemBarStyle.auto(AColor.TRANSPARENT, AColor.TRANSPARENT) { dark },
-                    navigationBarStyle = SystemBarStyle.auto(AColor.TRANSPARENT, AColor.TRANSPARENT) { dark },
-                )
-            }
-            Box(Modifier.fillMaxSize().background(Win.c.bg)) {
-                if (AppState.hasAllFiles || Perms.skipped) Shell() else Box(Modifier.systemBarsPadding().imePadding()) { PermissionScreen() }
-            }
+fun LumenRoot() {
+    LumenTheme {
+        val dark = isDarkTheme()
+        val view = LocalView.current
+        SideEffect {
+            val w = (view.context as? android.app.Activity)?.window ?: return@SideEffect
+            WindowCompat.getInsetsController(w, view).apply { isAppearanceLightStatusBars = !dark; isAppearanceLightNavigationBars = !dark }
+        }
+        BoxWithConstraints(Modifier.fillMaxSize()) {
+            val wide = maxWidth >= 840.dp
+            CompositionLocalProvider(LocalWide provides wide) { RootContent(wide) }
         }
     }
 }
 
 @Composable
-private fun Shell() {
+private fun RootContent(wide: Boolean) {
+    val c = Win.c
+    val ctx = LocalContext.current
     val tab = AppState.tab
-    LaunchedEffect(tab.id, tab.loc, AppState.rev, Settings.showHidden) { AppState.load(tab) }
-
-    val hasBack = AppState.settingsOpen || AppState.topSheet || AppState.drawer || AppState.addressEdit || AppState.searchOpen ||
-        tab.selection.isNotEmpty() || tab.canBack || AppState.tabs.size > 1 || tab.loc != Loc.Home
-    BackHandler(enabled = hasBack) {
-        when {
-            AppState.settingsOpen -> AppState.settingsOpen = false
-            AppState.topSheet -> AppState.topSheet = false
-            AppState.drawer -> AppState.drawer = false
-            AppState.addressEdit -> AppState.addressEdit = false
-            AppState.searchOpen -> AppState.searchOpen = false
-            tab.selection.isNotEmpty() -> tab.selection = emptySet()
-            tab.canBack -> tab.goBack()
-            AppState.tabs.size > 1 -> AppState.closeTab(AppState.activeIndex)
-            else -> tab.go(Loc.Home)
-        }
-    }
-
+    val loc = tab.loc
+    val drawer = rememberDrawerState(DrawerValue.Closed)
+    val scope = rememberCoroutineScope()
     val focus = remember { FocusRequester() }
+    @Suppress("UNUSED_VARIABLE") val permTick = Perms.tick
     LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
 
-    BoxWithConstraints(
-        Modifier.fillMaxSize().systemBarsPadding().imePadding()
-            .onKeyEvent { ev -> handleKey(ev) }.focusRequester(focus).focusable(),
-    ) {
-        val wide = maxWidth >= 720.dp
-        CompositionLocalProvider(LocalWide provides wide) {
-            Column(Modifier.fillMaxSize().background(Win.c.bg)) {
-                TabStrip()
-                Row(Modifier.weight(1f)) {
-                    if (wide) Sidebar(Modifier.width(272.dp).fillMaxHeight())
-                    Column(Modifier.weight(1f).fillMaxHeight().clip(RoundedCornerShape(topStart = if (wide) 8.dp else 0.dp)).background(Win.c.surface)) {
-                        NavRow()
-                        CommandBar()
-                        HDivider()
-                        val isList = tab.loc !is Loc.Home && tab.loc !is Loc.Device && tab.loc !is Loc.Analyzer
-                        Box(Modifier.weight(1f)) {
-                            Row(Modifier.fillMaxSize()) {
-                                Box(Modifier.weight(1f).fillMaxHeight()) {
-                                    when (tab.loc) {
-                                        Loc.Home -> HomeScreen()
-                                        Loc.Device -> DeviceScreen()
-                                        Loc.Analyzer -> AnalyzerScreen()
-                                        else -> Browser(tab)
-                                    }
-                                }
-                                if (wide && Settings.detailsPane && isList) {
-                                    Box(Modifier.width(1.dp).fillMaxHeight().background(Win.c.stroke))
-                                    DetailsPane(tab, Modifier.width(300.dp).fillMaxHeight())
-                                }
-                            }
-                            if (AppState.searchOpen && !wide) RecentSearches()
-                        }
-                        JobsBar()
-                        StatusBar(tab, isList)
-                    }
+    val drawerOpen = drawer.currentValue == DrawerValue.Open
+    BackHandler(enabled = drawerOpen || tab.selection.isNotEmpty() || AppState.searching || tab.canBack || loc !== Loc.Home || AppState.tabs.size > 1) {
+        when {
+            drawerOpen -> scope.launch { drawer.close() }
+            tab.selection.isNotEmpty() -> AppState.clearSelection()
+            AppState.searching -> AppState.searching = false
+            tab.canBack -> AppState.back()
+            loc !== Loc.Home -> AppState.go(Loc.Home)
+            AppState.tabs.size > 1 -> AppState.closeTab(AppState.active)
+        }
+    }
+
+    val main: @Composable (onMenu: () -> Unit) -> Unit = { onMenu ->
+        Column(Modifier.fillMaxSize()) {
+            TabStrip()
+            NavRow(onMenu)
+            HDivider()
+            CommandBar()
+            HDivider()
+            Row(Modifier.weight(1f).fillMaxWidth()) {
+                Box(Modifier.weight(1f).fillMaxHeight()) { Content(loc) }
+                if (wide && AppState.showDetails && loc.isListing()) {
+                    VDivider(Modifier.fillMaxHeight())
+                    DetailsPane(Modifier.width(300.dp).fillMaxHeight())
                 }
             }
-
-            // ---- compact: slide-in sidebar drawer
-            AnimatedVisibility(AppState.drawer && !wide, enter = fadeIn(), exit = fadeOut()) {
-                Box(Modifier.fillMaxSize().background(Win.c.scrim).clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { AppState.drawer = false })
-            }
-            AnimatedVisibility(AppState.drawer && !wide, enter = slideInHorizontally { -it }, exit = slideOutHorizontally { -it }) {
-                Sidebar(Modifier.width(300.dp).fillMaxHeight().shadow(16.dp), showBrand = true)
-            }
-
-            TopSheetHost()
-            ToastHost()
-            ViewerHost()
-            SettingsScreen()
-            DialogHost()
+            JobsBar()
+            if (loc.isListing()) StatusBar()
         }
+    }
+
+    Box(
+        Modifier.fillMaxSize().background(c.bg)
+            .onKeyEvent { handleKey(it) }
+            .focusRequester(focus).focusable()
+    ) {
+        if (wide) {
+            Row(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
+                Sidebar(onNavigate = {}, modifier = Modifier.width(264.dp))
+                VDivider(Modifier.fillMaxHeight())
+                Box(Modifier.weight(1f).fillMaxHeight()) { main({}) }
+            }
+        } else {
+            ModalNavigationDrawer(
+                modifier = Modifier.statusBarsPadding().navigationBarsPadding(),
+                drawerState = drawer,
+                drawerContent = {
+                    ModalDrawerSheet(drawerContainerColor = c.surface, modifier = Modifier.width(300.dp)) {
+                        Sidebar(onNavigate = { scope.launch { drawer.close() } }, modifier = Modifier.fillMaxSize())
+                    }
+                }
+            ) { main { scope.launch { drawer.open() } } }
+        }
+
+        if (AppState.showSettings) Box(Modifier.fillMaxSize().blockTouches()) { SettingsScreen() }
+        if (AppState.viewer != null) Box(Modifier.fillMaxSize().blockTouches()) { ViewerHost() }
+        if (!Settings.s.welcomed || AppState.showWelcome) Box(Modifier.fillMaxSize().blockTouches()) { WelcomeScreen() }
+        TopSheetHost()
+        SheetHost()
+        DialogHost()
+        ToastHost(Modifier.align(Alignment.BottomCenter).navigationBarsPadding())
     }
 }
 
-private fun handleKey(ev: androidx.compose.ui.input.key.KeyEvent): Boolean {
-    if (ev.type != KeyEventType.KeyDown) return false
-    val tab = AppState.tab
-    val sel = Actions.selected(tab)
-    val paths = sel.map { it.path }
-    return when {
-        ev.isCtrlPressed && ev.key == Key.C -> { Ops.copy(paths); true }
-        ev.isCtrlPressed && ev.key == Key.X -> { Ops.cut(paths); true }
-        ev.isCtrlPressed && ev.key == Key.V -> { tab.currentDir?.let { Ops.paste(it) }; true }
-        ev.isCtrlPressed && ev.key == Key.A -> { Actions.selectAll(tab); true }
-        ev.isCtrlPressed && ev.key == Key.T -> { AppState.newTab(); true }
-        ev.isCtrlPressed && ev.key == Key.W -> { AppState.closeTab(AppState.activeIndex); true }
-        ev.isCtrlPressed && ev.key == Key.F -> { AppState.searchOpen = true; true }
-        ev.isCtrlPressed && ev.key == Key.L -> { AppState.addressEdit = true; true }
-        ev.key == Key.Delete && sel.isNotEmpty() -> { Actions.deleteSelected(tab); true }
-        ev.key == Key.F2 && sel.size == 1 -> { AppState.dialog = Dialog.Rename(sel[0]); true }
-        ev.key == Key.F5 -> { AppState.rev++; true }
-        ev.isAltPressed && ev.key == Key.DirectionLeft -> { tab.goBack(); true }
-        ev.isAltPressed && ev.key == Key.DirectionRight -> { tab.goForward(); true }
-        ev.isAltPressed && ev.key == Key.DirectionUp -> { tab.up(); true }
-        ev.key == Key.Backspace && sel.isEmpty() -> { tab.up(); true }
-        ev.key == Key.Enter && sel.size == 1 -> { Ops.open(sel[0], tab.shown); true }
-        else -> false
-    }
+/** Full-screen overlays must swallow touches so nothing underneath reacts. Children still get events first. */
+private fun Modifier.blockTouches(): Modifier = pointerInput(Unit) {
+    awaitPointerEventScope { while (true) { awaitPointerEvent().changes.forEach { it.consume() } } }
 }
 
 @Composable
-private fun RecentSearches() {
-    Column(Modifier.fillMaxSize().background(Win.c.surface)) {
-        Txt("Recent searches", Modifier.padding(start = 16.dp, top = 14.dp, bottom = 6.dp), 13.sp, Win.c.textDim, FontWeight.SemiBold)
-        val root = when (val l = AppState.tab.loc) { is Loc.Dir -> l.path; is Loc.Search -> l.root; else -> Volumes.primaryRoot() }
-        LazyColumn {
-            items(Settings.recentSearches, key = { it }) { q ->
-                Row(
-                    Modifier.fillMaxWidth().clickable { AppState.searchOpen = false; AppState.tab.go(Loc.Search(q, root)) }.padding(horizontal = 16.dp, vertical = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) { Icon(Icons.Outlined.History, null, tint = Win.c.textDim, modifier = Modifier.size(20.dp)); Spacer(Modifier.width(14.dp)); Txt(q, size = 15.sp) }
-            }
-        }
-        Txt(
-            "Tips: ext:pdf · kind:image · kind:video · size>50mb · *.jpg",
-            Modifier.padding(16.dp), 12.sp, Win.c.textDim, maxLines = 3,
-        )
+private fun Content(loc: Loc) {
+    val tab = AppState.tab
+    when (loc) {
+        Loc.Home -> HomeScreen()
+        Loc.Device -> DeviceScreen()
+        Loc.Analyzer -> AnalyzerScreen()
+        Loc.Large -> LargeFilesScreen()
+        Loc.Dupes -> DuplicatesScreen()
+        Loc.Bin -> BinScreen()
+        Loc.WebVault -> key(tab.id) { WebVaultScreen() }
+        is Loc.Saf -> key(tab.id, loc) { SafScreen(loc) }
+        else -> FileBrowser()
+    }
+}
+
+// ---------------------------------------------------------------------------------------------- status & jobs & toast
+@Composable
+private fun StatusBar() {
+    val c = Win.c
+    val tab = AppState.tab
+    val n = tab.entries.size
+    val sel = tab.selection.size
+    Row(Modifier.fillMaxWidth().height(28.dp).background(c.surface).padding(horizontal = 14.dp), verticalAlignment = Alignment.CenterVertically) {
+        Txt(if (tab.loading && n == 0) "Loading…" else itemsLabel(n), 12.sp, color = c.text2)
+        if (sel > 0) { Spacer(Modifier.width(14.dp)); Txt("$sel selected", 12.sp, FontWeight.Medium, c.accent) }
+        if (tab.loading && n > 0) { Spacer(Modifier.width(14.dp)); Txt("Updating…", 12.sp, color = c.text2) }
     }
 }
 
 @Composable
 private fun JobsBar() {
-    val running = AppState.jobs.firstOrNull { it.state == 0 } ?: return
-    Column(Modifier.fillMaxWidth().background(Win.c.card).clickable { AppState.dialog = Dialog.Jobs() }.padding(horizontal = 14.dp, vertical = 6.dp)) {
+    val jobs = AppState.jobs
+    if (jobs.isEmpty()) return
+    val c = Win.c
+    val job = jobs.firstOrNull { it.state == JobState.RUNNING } ?: jobs.last()
+    @Suppress("UNUSED_VARIABLE") val tick = job.tick
+    Column(Modifier.fillMaxWidth().background(c.card).clickable { AppState.dialog = Dlg.Jobs }.padding(horizontal = 14.dp, vertical = 8.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Txt(running.title, Modifier.weight(1f), 13.sp)
-            if (!running.indeterminate) Txt("${(running.frac * 100).toInt()}%", size = 12.sp, color = Win.c.textDim)
-            Spacer(Modifier.width(6.dp))
-            IconBtn(Icons.Outlined.Close, "Cancel", { running.progress.cancel() }, size = 28.dp, iconSize = 16.dp)
+            Txt(job.title + if (jobs.size > 1) "  (+${jobs.size - 1})" else "", 13.sp, FontWeight.Medium, modifier = Modifier.weight(1f))
+            if (job.state == JobState.RUNNING) {
+                Txt("${(job.progress.fraction * 100).toInt()}%", 12.sp, color = c.text2)
+                IconBtn(Icons.Filled.Close, "Cancel", { job.progress.cancel() }, size = 32.dp, iconSize = 16.dp, tint = c.text2)
+            } else Txt(job.message, 12.sp, color = if (job.state == JobState.ERROR) c.danger else c.text2)
         }
-        if (running.indeterminate) LinearProgressIndicator(Modifier.fillMaxWidth().height(3.dp), color = Win.c.accent, trackColor = Win.c.stroke)
-        else LinearProgressIndicator(progress = { running.frac }, modifier = Modifier.fillMaxWidth().height(3.dp), color = Win.c.accent, trackColor = Win.c.stroke)
-    }
-}
-
-@Composable
-private fun StatusBar(tab: Tab, isList: Boolean) {
-    val sel = Actions.selected(tab)
-    val selecting = sel.isNotEmpty()
-    Row(
-        Modifier.fillMaxWidth().height(34.dp).background(Win.c.surface).padding(horizontal = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        val total = tab.shown.size
-        val text = when {
-            !isList -> ""
-            selecting -> "${sel.size} selected" + sel.filter { !it.isDir }.sumOf { it.size }.let { if (it > 0) "  ·  ${fmtSize(it)}" else "" }
-            tab.loading -> "Loading…"
-            else -> "$total item${if (total == 1) "" else "s"}"
-        }
-        Txt(text, Modifier.weight(1f), 13.sp, Win.c.textDim)
-        if (selecting) {
-            StatusBtn("Select all") { Actions.selectAll(tab) }
-            StatusBtn("Actions") { AppState.dialog = Dialog.Context(sel) }
-            StatusBtn("Clear") { tab.selection = emptySet() }
-        } else if (isList) {
-            IconBtn(Icons.Outlined.ViewList, "Details", { Settings.update { viewMode = ViewMode.DETAILS } }, tint = if (Settings.viewMode == ViewMode.DETAILS) Win.c.accent else Win.c.textDim, size = 30.dp, iconSize = 18.dp)
-            IconBtn(Icons.Outlined.GridView, "Large icons", { Settings.update { viewMode = ViewMode.LARGE } }, tint = if (Settings.viewMode == ViewMode.LARGE) Win.c.accent else Win.c.textDim, size = 30.dp, iconSize = 18.dp)
+        if (job.state == JobState.RUNNING) {
+            Spacer(Modifier.height(4.dp))
+            if (job.progress.total > 0) LinearProgressIndicator(progress = { job.progress.fraction }, Modifier.fillMaxWidth(), color = c.accent, trackColor = c.hover)
+            else LinearProgressIndicator(Modifier.fillMaxWidth(), color = c.accent, trackColor = c.hover)
         }
     }
 }
 
 @Composable
-private fun StatusBtn(label: String, onClick: () -> Unit) {
-    Txt(label, Modifier.clip(RoundedCornerShape(6.dp)).clickable(onClick = onClick).padding(horizontal = 10.dp, vertical = 6.dp), 13.sp, Win.c.accent, FontWeight.SemiBold)
-}
-
-@Composable
-private fun ToastHost() {
+private fun ToastHost(modifier: Modifier = Modifier) {
     val t = AppState.toast ?: return
-    LaunchedEffect(t.id) { delay(if (t.action != null) 6000 else 3200); if (AppState.toast?.id == t.id) AppState.toast = null }
-    Box(Modifier.fillMaxSize().padding(bottom = 64.dp, start = 12.dp, end = 12.dp), contentAlignment = Alignment.BottomCenter) {
-        Row(
-            Modifier.shadow(8.dp, RoundedCornerShape(8.dp)).clip(RoundedCornerShape(8.dp)).background(if (Win.c.dark) Color_(0xFF3A3A3A) else Color_(0xFF2B2B2B)).padding(start = 16.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Txt(t.text, Modifier.weight(1f, fill = false), 14.sp, androidx.compose.ui.graphics.Color.White, maxLines = 3)
-            if (t.action != null) {
-                Spacer(Modifier.width(10.dp))
-                Txt(t.action, Modifier.clip(RoundedCornerShape(6.dp)).clickable { AppState.toast = null; t.onAction?.invoke() }.padding(horizontal = 10.dp, vertical = 8.dp), 14.sp, androidx.compose.ui.graphics.Color(0xFF8AB4FF), FontWeight.SemiBold)
+    val c = Win.c
+    LaunchedEffect(t.id) {
+        delay(if (t.action != null) 6500 else 3500)
+        if (AppState.toast?.id == t.id) AppState.toast = null
+    }
+    val shape = RoundedCornerShape(10.dp)
+    Row(
+        modifier.padding(horizontal = 16.dp, vertical = 16.dp).shadow(8.dp, shape).clip(shape).background(if (c.dark) Color(0xFF3A3A3A) else Color(0xFF2B2B2B))
+            .padding(start = 16.dp, end = if (t.action != null) 6.dp else 16.dp, top = 4.dp, bottom = 4.dp),
+        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Txt(t.message, 14.sp, color = Color.White, maxLines = 3, modifier = Modifier.padding(vertical = 10.dp, horizontal = 0.dp).weight(1f, fill = false))
+        if (t.action != null) {
+            Box(Modifier.heightIn(min = 40.dp).clip(RoundedCornerShape(8.dp)).clickable { AppState.toast = null; t.onAction?.invoke() }.padding(horizontal = 12.dp), contentAlignment = Alignment.Center) {
+                Txt(t.action, 14.sp, FontWeight.SemiBold, Color(0xFF8FC4FF))
             }
         }
     }
 }
 
-private fun Color_(v: Long) = androidx.compose.ui.graphics.Color(v)
+// ---------------------------------------------------------------------------------------------- hardware keyboard shortcuts
+private fun handleKey(e: androidx.compose.ui.input.key.KeyEvent): Boolean {
+    if (e.type != KeyEventType.KeyDown) return false
+    val tab = AppState.tab
+    val sel = AppState.selectedEntries()
+    val paths = sel.map { it.path }
+    val dir = Actions.currentDir()
+    return when {
+        e.isCtrlPressed && e.key == Key.A -> { AppState.selectAll(); true }
+        e.isCtrlPressed && e.key == Key.C && paths.isNotEmpty() -> { Ops.copy(paths); true }
+        e.isCtrlPressed && e.key == Key.X && paths.isNotEmpty() -> { Ops.cut(paths); true }
+        e.isCtrlPressed && e.key == Key.V && dir != null && AppState.clip != null -> { Ops.paste(dir); true }
+        e.isCtrlPressed && e.key == Key.T -> { AppState.newTab(); true }
+        e.isCtrlPressed && e.key == Key.W -> { AppState.closeTab(AppState.active); true }
+        e.isCtrlPressed && e.key == Key.F -> { AppState.searching = true; true }
+        e.key == Key.Delete && sel.isNotEmpty() -> { Ops.delete(sel); true }
+        e.key == Key.F2 && sel.size == 1 -> { AppState.dialog = Dlg.Rename(sel[0]); true }
+        e.key == Key.F5 -> { AppState.refresh(); true }
+        e.isAltPressed && e.key == Key.DirectionLeft && tab.canBack -> { AppState.back(); true }
+        e.isAltPressed && e.key == Key.DirectionRight && tab.canForward -> { AppState.forward(); true }
+        e.isAltPressed && e.key == Key.DirectionUp && AppState.canUp() -> { AppState.up(); true }
+        e.key == Key.Escape && sel.isNotEmpty() -> { AppState.clearSelection(); true }
+        else -> false
+    }
+}

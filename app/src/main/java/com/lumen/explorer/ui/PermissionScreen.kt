@@ -71,11 +71,13 @@ fun PermissionScreen() {
                 launcher.launch(Perms.runtimePermissions())
             }
             Spacer(Modifier.height(24.dp))
-            PrimaryButton("Continue", { Perms.refresh(ctx); if (Perms.hasAllFiles(ctx)) AppState.rev++ }, Modifier.fillMaxWidth(), enabled = hasAll)
+            PrimaryButton("Continue", { Perms.refresh(ctx) }, Modifier.fillMaxWidth(), enabled = hasAll)
             Spacer(Modifier.height(10.dp))
             Txt(
-                "Continue with limited access", Modifier.clip(RoundedCornerShape(6.dp)).clickable { Perms.skipped = true }.padding(10.dp),
-                14.sp, Win.c.accent,
+                "Continue with limited access",
+                size = 14.sp,
+                color = Win.c.accent,
+                modifier = Modifier.clip(RoundedCornerShape(6.dp)).clickable { Perms.skipped = true }.padding(10.dp),
             )
             Spacer(Modifier.height(10.dp))
             Txt("Everything stays on your device. This app has no internet permission.", size = 12.sp, color = Win.c.textDim, maxLines = 2, align = TextAlign.Center)

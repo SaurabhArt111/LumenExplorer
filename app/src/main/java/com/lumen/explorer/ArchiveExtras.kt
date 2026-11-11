@@ -1,5 +1,11 @@
 package com.lumen.explorer
 
+import net.lingala.zip4j.model.ZipParameters
+import net.lingala.zip4j.model.enums.AesKeyStrength
+import net.lingala.zip4j.model.enums.CompressionLevel
+import net.lingala.zip4j.model.enums.EncryptionMethod
+import org.apache.commons.compress.PasswordRequiredException
+import org.apache.commons.compress.archivers.sevenz.SevenZArchiveEntry
 import org.apache.commons.compress.archivers.sevenz.SevenZFile
 import org.apache.commons.compress.archivers.sevenz.SevenZOutputFile
 import org.apache.commons.compress.archivers.tar.TarArchiveEntry
@@ -9,26 +15,20 @@ import org.apache.commons.compress.compressors.bzip2.BZip2CompressorInputStream
 import org.apache.commons.compress.compressors.gzip.GzipCompressorInputStream
 import org.apache.commons.compress.compressors.gzip.GzipCompressorOutputStream
 import org.apache.commons.compress.compressors.xz.XZCompressorInputStream
-import net.lingala.zip4j.model.ZipParameters
-import net.lingala.zip4j.model.enums.AesKeyStrength
-import net.lingala.zip4j.model.enums.CompressionLevel
-import net.lingala.zip4j.model.enums.EncryptionMethod
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
-import java.io.FilterInputStream
 import java.io.InputStream
 
-/** Everything that needs a third-party library: TAR/GZ/BZ2/XZ/7z extraction, 7z + TAR.GZ creation, AES-256 password ZIPs. */
+/** Everything beyond plain ZIP: AES-256 ZIP, 7z, TAR(.gz/.bz2/.xz), single-file GZ/BZ2/XZ. All offline, pure Java. */
 object ArchiveExtras {
-
     enum class Format(val label: String, val ext: String) {
-        ZIP("ZIP", "zip"), ZIP_AES("ZIP – password (AES-256)", "zip"), SEVEN_Z("7z", "7z"), TAR("TAR", "tar"), TAR_GZ("TAR.GZ", "tar.gz")
+        ZIP("ZIP", "zip"), ZIP_AES("ZIP · password (AES-256)", "zip"), SEVEN_Z("7z", "7z"), TAR("TAR", "tar"), TAR_GZ("TAR.GZ", "tar.gz")
     }
 
-    private class Counting(i: InputStream, val p: Progress) : FilterInputStream(i) {
+    private class CountingIn(i: InputStream, val p: Progress) : java.io.FilterInputStream(i) {
         override fun read(): Int { val r = super.read(); if (r >= 0) p.add(1); return r }
         override fun read(b: ByteArray, off: Int, len: Int): Int { val r = super.read(b, off, len); if (r > 0) p.add(r.toLong()); return r }
     }
@@ -36,240 +36,258 @@ object ArchiveExtras {
     fun isEncryptedZip(f: File): Boolean = try { net.lingala.zip4j.ZipFile(f).isEncrypted } catch (_: Throwable) { false }
 
     // ------------------------------------------------------------------ extract
-
     fun extract(file: File, destDir: File, policy: Conflict, progress: Progress, password: String? = null): OpResult {
-        val type = Mime.archiveTypeOf(file.name) ?: return OpResult().also { it.errors.add("Unsupported archive type") }
-        return when (type) {
-            Mime.ArchiveType.ZIP -> if (isEncryptedZip(file)) extractEncryptedZip(file, destDir, progress, password) else ZipCore.extract(file, destDir, null, policy, progress)
-            Mime.ArchiveType.SEVEN_Z -> extract7z(file, destDir, policy, progress, password)
-            Mime.ArchiveType.RAR -> OpResult().also { it.errors.add("RAR archives can't be extracted offline yet. Use \"Open with\" to extract in another app.") }
-            else -> extractTarFamily(file, destDir, type, policy, progress)
-        }
-    }
-
-    private fun extractEncryptedZip(file: File, destDir: File, p: Progress, password: String?): OpResult {
-        val res = OpResult()
-        if (password.isNullOrEmpty()) { res.errors.add("PASSWORD_REQUIRED"); return res }
-        try {
-            p.total = 1
-            destDir.mkdirs()
-            val z = net.lingala.zip4j.ZipFile(file, password.toCharArray())
-            z.extractAll(destDir.absolutePath)
-            p.add(1); res.done = 1; res.touched.add(destDir.absolutePath)
-        } catch (t: Throwable) {
-            res.errors.add(if (t.message?.contains("password", true) == true) "Wrong password." else (t.message ?: "Couldn't extract"))
-        }
-        return res
-    }
-
-    private fun safeTarget(destDir: File, rootCanon: String, rawName: String): File? {
-        val clean = rawName.replace('\\', '/').trimStart('/')
-        val t = File(destDir, clean)
-        val c = t.canonicalPath
-        return if (c == rootCanon || c.startsWith(rootCanon + File.separator)) t else null
+        val type = Mime.archiveTypeOf(file.name)
+        destDir.mkdirs()
+        return try {
+            when (type) {
+                Mime.ArchiveType.ZIP -> if (isEncryptedZip(file)) extractEncryptedZip(file, destDir, policy, progress, password) else ZipCore.extract(file, destDir, policy, progress)
+                Mime.ArchiveType.SEVEN_Z -> extract7z(file, destDir, policy, progress, password)
+                Mime.ArchiveType.TAR, Mime.ArchiveType.TAR_GZ, Mime.ArchiveType.TAR_BZ2, Mime.ArchiveType.TAR_XZ -> extractTar(file, destDir, type, policy, progress)
+                Mime.ArchiveType.GZ, Mime.ArchiveType.BZ2, Mime.ArchiveType.XZ -> extractSingle(file, destDir, type, policy, progress)
+                Mime.ArchiveType.RAR -> OpResult().apply { errors += "RAR can't be extracted offline — opening it in another app is the only option." }
+                null -> OpResult().apply { errors += "Not a supported archive" }
+            }
+        } catch (e: Exception) { OpResult().apply { errors += (e.message ?: "Couldn't extract") } }
     }
 
     private fun writeOut(input: InputStream, target: File, policy: Conflict, res: OpResult, name: String, p: Progress): Boolean {
-        var t = target
-        t.parentFile?.mkdirs()
-        if (t.exists()) when (policy) {
+        var out = target
+        out.parentFile?.mkdirs()
+        if (out.exists()) when (policy) {
             Conflict.SKIP -> { res.skipped++; return false }
-            Conflict.KEEP_BOTH -> t = FileOps.uniqueNumbered(t.parentFile!!, t.name)
-            Conflict.REPLACE -> t.delete()
+            Conflict.KEEP_BOTH -> out = FileOps.uniqueFile(out.parentFile!!, out.name)
+            Conflict.REPLACE -> out.delete()
         }
-        p.note = t.name
-        FileOutputStream(t).use { out ->
-            val buf = ByteArray(128 * 1024)
-            while (true) {
-                if (p.cancelled) return false
-                val n = input.read(buf); if (n < 0) break
-                out.write(buf, 0, n)
+        return try {
+            FileOutputStream(out).use { o ->
+                val buf = ByteArray(128 * 1024)
+                while (true) {
+                    if (p.cancelled) break
+                    val n = input.read(buf); if (n < 0) break
+                    o.write(buf, 0, n); p.add(n.toLong())
+                }
             }
-        }
-        res.done++; res.touched.add(t.absolutePath)
-        return true
+            res.done++; true
+        } catch (e: Exception) { res.errors += "$name: ${e.message}"; false }
     }
 
-    private fun extractTarFamily(file: File, destDir: File, type: Mime.ArchiveType, policy: Conflict, p: Progress): OpResult {
+    private fun extractEncryptedZip(file: File, destDir: File, policy: Conflict, p: Progress, password: String?): OpResult {
         val res = OpResult()
-        p.total = file.length().coerceAtLeast(1)
+        if (password.isNullOrEmpty()) { res.errors += "PASSWORD_REQUIRED"; return res }
         try {
-            destDir.mkdirs()
-            val rootCanon = destDir.canonicalPath
-            val raw = BufferedInputStream(Counting(FileInputStream(file), p), 128 * 1024)
-            when (type) {
-                Mime.ArchiveType.GZ, Mime.ArchiveType.BZ2, Mime.ArchiveType.XZ -> {
-                    val s: InputStream = when (type) { Mime.ArchiveType.GZ -> GzipCompressorInputStream(raw); Mime.ArchiveType.BZ2 -> BZip2CompressorInputStream(raw); else -> XZCompressorInputStream(raw) }
-                    s.use { writeOut(it, File(destDir, file.name.substringBeforeLast('.')), policy, res, file.name, p) }
-                }
-                else -> {
-                    val s: InputStream = when (type) {
-                        Mime.ArchiveType.TAR_GZ -> GzipCompressorInputStream(raw)
-                        Mime.ArchiveType.TAR_BZ2 -> BZip2CompressorInputStream(raw)
-                        Mime.ArchiveType.TAR_XZ -> XZCompressorInputStream(raw)
-                        else -> raw
-                    }
-                    TarArchiveInputStream(s).use { tin ->
-                        while (true) {
-                            if (p.cancelled) { res.cancelled = true; break }
-                            val e = tin.nextEntry ?: break
-                            if (e.isSymbolicLink || e.isLink) continue
-                            val t = safeTarget(destDir, rootCanon, e.name)
-                            if (t == null) { res.errors.add("${e.name}: blocked (path escapes the folder)"); continue }
-                            if (e.isDirectory) { t.mkdirs(); continue }
-                            try { writeOut(tin, t, policy, res, e.name, p) } catch (x: Throwable) { res.errors.add("${e.name}: ${x.message}") }
-                        }
-                    }
-                }
+            val z = net.lingala.zip4j.ZipFile(file, password.toCharArray())
+            val headers = z.fileHeaders
+            p.total = headers.sumOf { it.uncompressedSize.coerceAtLeast(0) }.coerceAtLeast(1)
+            for (h in headers) {
+                if (p.cancelled) { res.cancelled = true; break }
+                p.label = Paths.name(h.fileName)
+                val target = ZipCore.safeTarget(destDir, h.fileName)
+                if (target == null) { res.errors += "Skipped unsafe path: ${h.fileName}"; continue }
+                if (h.isDirectory) { target.mkdirs(); continue }
+                z.getInputStream(h).use { writeOut(it, target, policy, res, h.fileName, p) }
             }
-        } catch (t: Throwable) { res.errors.add(t.message ?: "Couldn't open the archive") }
+        } catch (e: net.lingala.zip4j.exception.ZipException) {
+            res.errors.clear(); res.errors += if (e.type == net.lingala.zip4j.exception.ZipException.Type.WRONG_PASSWORD) "Wrong password." else (e.message ?: "Couldn't extract")
+        }
         return res
     }
 
+    private fun extractTar(file: File, destDir: File, type: Mime.ArchiveType, policy: Conflict, p: Progress): OpResult {
+        val res = OpResult()
+        p.total = file.length().coerceAtLeast(1)
+        val raw = CountingIn(BufferedInputStream(FileInputStream(file), 128 * 1024), p)
+        val decoded: InputStream = when (type) {
+            Mime.ArchiveType.TAR_GZ -> GzipCompressorInputStream(raw)
+            Mime.ArchiveType.TAR_BZ2 -> BZip2CompressorInputStream(raw)
+            Mime.ArchiveType.TAR_XZ -> XZCompressorInputStream(raw)
+            else -> raw
+        }
+        TarArchiveInputStream(decoded).use { tar ->
+            while (true) {
+                if (p.cancelled) { res.cancelled = true; break }
+                val e: TarArchiveEntry = tar.nextTarEntry ?: break
+                val t = ZipCore.safeTarget(destDir, e.name)
+                if (t == null) { res.errors += "Skipped unsafe path: ${e.name}"; continue }
+                if (e.isDirectory) { t.mkdirs(); continue }
+                if (!e.isFile) continue
+                p.label = Paths.name(e.name)
+                writeTarEntry(tar, t, policy, res, e.name)
+            }
+        }
+        return res
+    }
+
+    // writes without double-counting progress (tar progress is measured on the raw compressed stream)
+    private fun writeTarEntry(input: InputStream, target: File, policy: Conflict, res: OpResult, name: String) {
+        var out = target
+        out.parentFile?.mkdirs()
+        if (out.exists()) when (policy) {
+            Conflict.SKIP -> { res.skipped++; return }
+            Conflict.KEEP_BOTH -> out = FileOps.uniqueFile(out.parentFile!!, out.name)
+            Conflict.REPLACE -> out.delete()
+        }
+        try { FileOutputStream(out).use { o -> input.copyTo(o, 128 * 1024) }; res.done++ } catch (e: Exception) { res.errors += "$name: ${e.message}" }
+    }
+
+    private fun extractSingle(file: File, destDir: File, type: Mime.ArchiveType, policy: Conflict, p: Progress): OpResult {
+        val res = OpResult()
+        p.total = file.length().coerceAtLeast(1)
+        val raw = CountingIn(BufferedInputStream(FileInputStream(file), 128 * 1024), p)
+        val decoded: InputStream = when (type) {
+            Mime.ArchiveType.GZ -> GzipCompressorInputStream(raw)
+            Mime.ArchiveType.BZ2 -> BZip2CompressorInputStream(raw)
+            else -> XZCompressorInputStream(raw)
+        }
+        val outName = file.name.substringBeforeLast('.').ifEmpty { file.name + ".out" }
+        decoded.use { writeTarEntry(it, File(destDir, outName), policy, res, outName) }
+        return res
+    }
+
+    @Suppress("DEPRECATION")
     private fun extract7z(file: File, destDir: File, policy: Conflict, p: Progress, password: String?): OpResult {
         val res = OpResult()
         try {
-            destDir.mkdirs()
-            val rootCanon = destDir.canonicalPath
-            val b = SevenZFile.builder().setFile(file)
-            if (!password.isNullOrEmpty()) b.setPassword(password.toCharArray())
-            b.get().use { sz ->
-                var total = 0L
-                for (en in sz.entries) total += en.size.coerceAtLeast(0)
-                p.total = total.coerceAtLeast(1)
+            val sz = if (password.isNullOrEmpty()) SevenZFile(file) else SevenZFile(file, password.toCharArray())
+            sz.use { z ->
+                p.total = z.entries.sumOf { it.size.coerceAtLeast(0) }.coerceAtLeast(1)
                 while (true) {
                     if (p.cancelled) { res.cancelled = true; break }
-                    val e = sz.nextEntry ?: break
-                    val t = safeTarget(destDir, rootCanon, e.name)
-                    if (t == null) { res.errors.add("${e.name}: blocked (path escapes the folder)"); continue }
+                    val e: SevenZArchiveEntry = z.nextEntry ?: break
+                    val t = ZipCore.safeTarget(destDir, e.name)
+                    if (t == null) { res.errors += "Skipped unsafe path: ${e.name}"; continue }
                     if (e.isDirectory) { t.mkdirs(); continue }
+                    p.label = Paths.name(e.name)
                     val input = object : InputStream() {
-                        override fun read(): Int = sz.read()
-                        override fun read(buf: ByteArray, off: Int, len: Int): Int { val n = sz.read(buf, off, len); if (n > 0) p.add(n.toLong()); return n }
+                        override fun read(): Int = z.read()
+                        override fun read(b: ByteArray, off: Int, len: Int): Int = z.read(b, off, len)
                     }
-                    try { writeOut(input, t, policy, res, e.name, p) } catch (x: Throwable) { res.errors.add("${e.name}: ${x.message}") }
+                    writeOut(input, t, policy, res, e.name, p)
                 }
             }
-        } catch (t: Throwable) {
-            val m = t.message ?: ""
-            res.errors.add(if (m.contains("password", true) || m.contains("encrypted", true)) (if (password.isNullOrEmpty()) "PASSWORD_REQUIRED" else "Wrong password.") else m.ifEmpty { "Couldn't open the archive" })
+        } catch (_: PasswordRequiredException) {
+            res.errors.clear(); res.errors += "PASSWORD_REQUIRED"
+        } catch (e: java.io.IOException) {
+            res.errors.clear(); res.errors += if (!password.isNullOrEmpty()) "Wrong password." else (e.message ?: "Couldn't extract")
         }
         return res
     }
 
-    // ------------------------------------------------------------------ list (preview)
-
+    // ------------------------------------------------------------------ list
     fun list(file: File): List<ZipCore.Item> {
-        val type = Mime.archiveTypeOf(file.name) ?: return emptyList()
-        return when (type) {
-            Mime.ArchiveType.ZIP -> if (isEncryptedZip(file)) zip4jList(file) else ZipCore.list(file)
-            Mime.ArchiveType.SEVEN_Z -> try {
-                SevenZFile.builder().setFile(file).get().use { sz -> sz.entries.map { ZipCore.Item(it.name, it.isDirectory, it.size, -1, if (it.hasLastModifiedDate) it.lastModifiedDate.time else 0L) } }
-            } catch (_: Throwable) { emptyList() }
-            Mime.ArchiveType.GZ, Mime.ArchiveType.BZ2, Mime.ArchiveType.XZ -> listOf(ZipCore.Item(file.name.substringBeforeLast('.'), false, -1, file.length(), file.lastModified()))
-            Mime.ArchiveType.RAR -> emptyList()
-            else -> try {
-                val raw = BufferedInputStream(FileInputStream(file))
-                val s: InputStream = when (type) { Mime.ArchiveType.TAR_GZ -> GzipCompressorInputStream(raw); Mime.ArchiveType.TAR_BZ2 -> BZip2CompressorInputStream(raw); Mime.ArchiveType.TAR_XZ -> XZCompressorInputStream(raw); else -> raw }
-                val out = ArrayList<ZipCore.Item>()
-                TarArchiveInputStream(s).use { tin -> while (out.size < 5000) { val e = tin.nextEntry ?: break; out.add(ZipCore.Item(e.name, e.isDirectory, e.size, -1, e.lastModifiedDate.time)) } }
-                out
-            } catch (_: Throwable) { emptyList() }
-        }
+        val type = Mime.archiveTypeOf(file.name)
+        val out = ArrayList<ZipCore.Item>()
+        try {
+            when (type) {
+                Mime.ArchiveType.ZIP -> return if (isEncryptedZip(file)) net.lingala.zip4j.ZipFile(file).fileHeaders.map { ZipCore.Item(it.fileName, it.uncompressedSize, it.compressedSize, it.lastModifiedTimeEpoch, it.isDirectory) } else ZipCore.list(file)
+                Mime.ArchiveType.SEVEN_Z -> @Suppress("DEPRECATION") SevenZFile(file).use { z -> z.entries.forEach { out += ZipCore.Item(it.name, it.size, it.size, it.lastModifiedDate?.time ?: 0, it.isDirectory) } }
+                Mime.ArchiveType.TAR, Mime.ArchiveType.TAR_GZ, Mime.ArchiveType.TAR_BZ2, Mime.ArchiveType.TAR_XZ -> {
+                    val raw = BufferedInputStream(FileInputStream(file))
+                    val dec: InputStream = when (type) {
+                        Mime.ArchiveType.TAR_GZ -> GzipCompressorInputStream(raw); Mime.ArchiveType.TAR_BZ2 -> BZip2CompressorInputStream(raw)
+                        Mime.ArchiveType.TAR_XZ -> XZCompressorInputStream(raw); else -> raw
+                    }
+                    TarArchiveInputStream(dec).use { t ->
+                        while (true) { val e = t.nextTarEntry ?: break; out += ZipCore.Item(e.name, e.size, e.size, e.modTime?.time ?: 0, e.isDirectory) }
+                    }
+                }
+                else -> {}
+            }
+        } catch (_: Exception) { }
+        return out
     }
 
-    private fun zip4jList(f: File): List<ZipCore.Item> = try {
-        net.lingala.zip4j.ZipFile(f).fileHeaders.map { ZipCore.Item(it.fileName, it.isDirectory, it.uncompressedSize, it.compressedSize, it.lastModifiedTimeEpoch) }
-    } catch (_: Throwable) { emptyList() }
-
     // ------------------------------------------------------------------ create
-
     fun create(format: Format, sources: List<String>, dest: File, level: Int, password: String?, progress: Progress): OpResult = when (format) {
-        Format.ZIP -> ZipCore.compress(sources, dest, level, progress)
+        Format.ZIP -> ZipCore.create(sources, dest, level, progress)
         Format.ZIP_AES -> zipAes(sources, dest, level, password ?: "", progress)
         Format.SEVEN_Z -> create7z(sources, dest, progress)
-        Format.TAR -> createTar(sources, dest, gzip = false, progress)
-        Format.TAR_GZ -> createTar(sources, dest, gzip = true, progress)
+        Format.TAR -> createTar(sources, dest, false, progress)
+        Format.TAR_GZ -> createTar(sources, dest, true, progress)
     }
 
     private fun zipAes(sources: List<String>, dest: File, level: Int, password: String, p: Progress): OpResult {
         val res = OpResult()
+        if (password.isEmpty()) { res.errors += "Enter a password"; return res }
+        p.total = FileOps.tally(sources).bytes.coerceAtLeast(1)
         try {
-            p.total = sources.size.toLong().coerceAtLeast(1)
-            val zp = ZipParameters().apply {
+            val z = net.lingala.zip4j.ZipFile(dest, password.toCharArray())
+            val params = ZipParameters().apply {
                 isEncryptFiles = true
                 encryptionMethod = EncryptionMethod.AES
                 aesKeyStrength = AesKeyStrength.KEY_STRENGTH_256
-                compressionLevel = when { level <= 0 -> CompressionLevel.NO_COMPRESSION; level <= 3 -> CompressionLevel.FAST; level >= 8 -> CompressionLevel.MAXIMUM; else -> CompressionLevel.NORMAL }
+                compressionLevel = when { level <= 0 -> CompressionLevel.NO_COMPRESSION; level <= 3 -> CompressionLevel.FASTEST; level <= 6 -> CompressionLevel.NORMAL; else -> CompressionLevel.MAXIMUM }
             }
-            val z = net.lingala.zip4j.ZipFile(dest, password.toCharArray())
             for (s in sources) {
-                if (p.cancelled) { dest.delete(); res.cancelled = true; return res }
+                if (p.cancelled) break
                 val f = File(s)
-                p.note = f.name
-                if (f.isDirectory) z.addFolder(f, zp) else z.addFile(f, zp)
-                p.add(1)
+                p.label = f.name
+                if (f.isDirectory) z.addFolder(f, params) else z.addFile(f, params)
+                p.add(FileOps.tally(listOf(s)).bytes)
+                res.done++
             }
-            res.done = 1; res.created.add(dest.absolutePath); res.touched.add(dest.absolutePath)
-        } catch (t: Throwable) { dest.delete(); res.errors.add(t.message ?: "Couldn't create the archive") }
+            if (p.cancelled) { dest.delete(); res.cancelled = true } else res.created += dest.absolutePath
+        } catch (e: Exception) { res.errors += (e.message ?: "Couldn't create archive"); dest.delete() }
         return res
     }
 
     private fun create7z(sources: List<String>, dest: File, p: Progress): OpResult {
         val res = OpResult()
-        p.total = FileOps.totalBytes(sources).coerceAtLeast(1)
+        p.total = FileOps.tally(sources).bytes.coerceAtLeast(1)
         try {
             SevenZOutputFile(dest).use { out ->
                 fun add(f: File, name: String) {
                     if (p.cancelled) return
-                    val e = out.createArchiveEntry(f, name)
-                    out.putArchiveEntry(e)
-                    if (f.isFile) {
-                        p.note = f.name
+                    if (f.isDirectory) {
+                        out.putArchiveEntry(out.createArchiveEntry(f, "$name/")); out.closeArchiveEntry()
+                        f.listFiles()?.forEach { add(it, "$name/${it.name}") }
+                    } else {
+                        p.label = f.name
+                        out.putArchiveEntry(out.createArchiveEntry(f, name))
                         FileInputStream(f).use { i ->
                             val buf = ByteArray(128 * 1024)
                             while (true) { if (p.cancelled) break; val n = i.read(buf); if (n < 0) break; out.write(buf, 0, n); p.add(n.toLong()) }
                         }
+                        out.closeArchiveEntry(); res.done++
                     }
-                    out.closeArchiveEntry()
-                    if (f.isDirectory) f.listFiles()?.sortedBy { it.name }?.forEach { add(it, "$name/${it.name}") }
                 }
-                for (s in sources) { val f = File(s); if (f.exists() && f.absolutePath != dest.absolutePath) add(f, f.name) }
+                for (s in sources) { val f = File(s); if (f.absolutePath != dest.absolutePath) add(f, f.name) }
                 out.finish()
             }
-            if (p.cancelled) { dest.delete(); res.cancelled = true } else { res.done = 1; res.created.add(dest.absolutePath); res.touched.add(dest.absolutePath) }
-        } catch (t: Throwable) { dest.delete(); res.errors.add(t.message ?: "Couldn't create the archive") }
+            if (p.cancelled) { dest.delete(); res.cancelled = true } else res.created += dest.absolutePath
+        } catch (e: Exception) { res.errors += (e.message ?: "Couldn't create archive"); dest.delete() }
         return res
     }
 
     private fun createTar(sources: List<String>, dest: File, gzip: Boolean, p: Progress): OpResult {
         val res = OpResult()
-        p.total = FileOps.totalBytes(sources).coerceAtLeast(1)
+        p.total = FileOps.tally(sources).bytes.coerceAtLeast(1)
         try {
-            val fos = BufferedOutputStream(FileOutputStream(dest), 128 * 1024)
-            val stream = if (gzip) GzipCompressorOutputStream(fos) else fos
-            TarArchiveOutputStream(stream).use { tos ->
-                tos.setLongFileMode(TarArchiveOutputStream.LONGFILE_POSIX)
-                tos.setBigNumberMode(TarArchiveOutputStream.BIGNUMBER_POSIX)
+            val raw = BufferedOutputStream(FileOutputStream(dest), 128 * 1024)
+            val stream = if (gzip) GzipCompressorOutputStream(raw) else raw
+            TarArchiveOutputStream(stream).use { tar ->
+                tar.setLongFileMode(TarArchiveOutputStream.LONGFILE_POSIX)
+                tar.setBigNumberMode(TarArchiveOutputStream.BIGNUMBER_POSIX)
                 fun add(f: File, name: String) {
-                    if (p.cancelled) return
-                    val e = TarArchiveEntry(f, name)
-                    tos.putArchiveEntry(e)
-                    if (f.isFile) {
-                        p.note = f.name
+                    if (p.cancelled || f.absolutePath == dest.absolutePath) return
+                    if (f.isDirectory) {
+                        tar.putArchiveEntry(TarArchiveEntry(f, "$name/")); tar.closeArchiveEntry()
+                        f.listFiles()?.forEach { add(it, "$name/${it.name}") }
+                    } else {
+                        p.label = f.name
+                        tar.putArchiveEntry(TarArchiveEntry(f, name))
                         FileInputStream(f).use { i ->
                             val buf = ByteArray(128 * 1024)
-                            while (true) { if (p.cancelled) break; val n = i.read(buf); if (n < 0) break; tos.write(buf, 0, n); p.add(n.toLong()) }
+                            while (true) { if (p.cancelled) break; val n = i.read(buf); if (n < 0) break; tar.write(buf, 0, n); p.add(n.toLong()) }
                         }
+                        tar.closeArchiveEntry(); res.done++
                     }
-                    tos.closeArchiveEntry()
-                    if (f.isDirectory) f.listFiles()?.sortedBy { it.name }?.forEach { add(it, "$name/${it.name}") }
                 }
-                for (s in sources) { val f = File(s); if (f.exists() && f.absolutePath != dest.absolutePath) add(f, f.name) }
-                tos.finish()
+                for (s in sources) { val f = File(s); add(f, f.name) }
+                tar.finish()
             }
-            if (p.cancelled) { dest.delete(); res.cancelled = true } else { res.done = 1; res.created.add(dest.absolutePath); res.touched.add(dest.absolutePath) }
-        } catch (t: Throwable) { dest.delete(); res.errors.add(t.message ?: "Couldn't create the archive") }
+            if (p.cancelled) { dest.delete(); res.cancelled = true } else res.created += dest.absolutePath
+        } catch (e: Exception) { res.errors += (e.message ?: "Couldn't create archive"); dest.delete() }
         return res
     }
 }

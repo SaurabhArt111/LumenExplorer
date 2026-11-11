@@ -1,244 +1,278 @@
 package com.lumen.explorer
 
+import android.app.Activity
 import android.content.ActivityNotFoundException
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
-import android.provider.Settings as AndroidSettings
 import androidx.core.content.FileProvider
 import java.io.File
 
-/** User-level file operations. Called from the UI on the main thread; heavy work runs as a Job. */
+/** User-level actions. Everything that touches the file system runs as a job off the main thread. */
 object Ops {
-    private val ctx: Context get() = AppState.app
-    private fun s(n: Int, one: String, many: String = one + "s") = if (n == 1) "1 $one" else "$n $many"
+    var activity: Activity? = null
+    private var lastOpenAt = 0L
+    private var lastOpenKey = ""
+    private val ctx: Context get() = activity ?: AppState.app
 
     // ------------------------------------------------------------------ clipboard
     fun copy(paths: List<String>) {
         if (paths.isEmpty()) return
         AppState.clip = Clip(paths, false)
-        AppState.toast("Copied ${s(paths.size, "item")}")
+        AppState.toast(if (paths.size == 1) "Copied \"${Paths.name(paths[0])}\"" else "Copied ${paths.size} items")
     }
 
     fun cut(paths: List<String>) {
         if (paths.isEmpty()) return
         AppState.clip = Clip(paths, true)
-        AppState.toast("Cut ${s(paths.size, "item")}")
+        AppState.toast(if (paths.size == 1) "Cut \"${Paths.name(paths[0])}\"" else "Cut ${paths.size} items")
     }
 
     fun paste(destDir: String) {
         val c = AppState.clip ?: return
-        val inSame = c.paths.all { File(it).parent == destDir }
-        val conflicts = if (inSame) emptyList() else FileOps.findConflicts(c.paths, destDir)
-        if (conflicts.isEmpty()) runTransfer(c.paths, destDir, c.move, Conflict.KEEP_BOTH)
-        else AppState.dialog = Dialog.Conflicts(conflicts, c.move) { runTransfer(c.paths, destDir, c.move, it) }
+        val conflicts = c.paths.filter { p -> File(destDir, Paths.name(p)).exists() && Paths.parent(p) != destDir }.map { Paths.name(it) }
+        if (conflicts.isNotEmpty()) AppState.dialog = Dlg.Conflicts(c.paths, destDir, c.cut, conflicts)
+        else transferTo(c.paths, destDir, c.cut, Conflict.KEEP_BOTH)
     }
 
-    fun transferTo(paths: List<String>, destDir: String, move: Boolean) {
-        val conflicts = FileOps.findConflicts(paths, destDir).filter { n -> paths.none { File(it).parent == destDir && File(it).name == n } }
-        if (conflicts.isEmpty()) runTransfer(paths, destDir, move, Conflict.KEEP_BOTH)
-        else AppState.dialog = Dialog.Conflicts(conflicts, move) { runTransfer(paths, destDir, move, it) }
-    }
-
-    private fun runTransfer(paths: List<String>, dest: String, move: Boolean, policy: Conflict) {
-        val title = (if (move) "Moving " else "Copying ") + s(paths.size, "item")
-        AppState.startJob(title, { p -> FileOps.transfer(paths, dest, move, policy, p) }) { r ->
-            if (move) AppState.clip = null
+    fun transferTo(paths: List<String>, dest: String, move: Boolean, policy: Conflict) {
+        AppState.startJob(
+            (if (move) "Moving " else "Copying ") + (if (paths.size == 1) "\"${Paths.name(paths[0])}\"" else "${paths.size} items"),
+            { p -> FileOps.transfer(paths, File(dest), move, policy, p) }
+        ) { r ->
+            if (move && AppState.clip?.cut == true) AppState.clip = null
+            val made = r.created.map { File(it) }.filter { it.isFile }.map { FileOps.entry(it) }
+            AppState.changed(paths + dest, removed = if (move) paths else emptyList(), added = made)
             report(if (move) "Moved" else "Copied", r)
-            if (AppState.tab.currentDir == dest) AppState.tab.selection = r.created.filter { File(it).parent == dest }.toSet()
         }
     }
 
     private fun report(verb: String, r: OpResult) {
-        when {
-            r.cancelled -> AppState.toast("Cancelled")
-            r.errors.isNotEmpty() -> AppState.toast("$verb ${r.done}, ${r.errors.size} failed", "Details") {
-                AppState.dialog = Dialog.Info("Some items failed", r.errors.take(50))
-            }
-            else -> AppState.toast("$verb ${s(r.done, "item")}" + if (r.skipped > 0) " (${r.skipped} skipped)" else "")
-        }
+        AppState.toast(when {
+            r.cancelled -> "Cancelled"
+            r.errors.isNotEmpty() && r.done == 0 -> r.errors.first()
+            r.errors.isNotEmpty() -> "$verb ${r.done}, ${r.errors.size} failed: ${r.errors.first()}"
+            r.skipped > 0 -> "$verb ${r.done}, skipped ${r.skipped}"
+            else -> "$verb ${r.done} item${if (r.done == 1) "" else "s"}"
+        })
     }
 
     // ------------------------------------------------------------------ delete / bin
-    fun delete(paths: List<String>, permanent: Boolean = false) {
-        if (paths.isEmpty()) return
-        val toBin = Settings.useBin && !permanent && AppState.tab.loc != Loc.Bin
-        if (toBin) {
-            val groups = paths.groupBy { Volumes.rootOf(it, AppState.volumes) }
-            val moved = ArrayList<Pair<RecycleBin, List<RecycleBin.Item>>>()
-            AppState.startJob("Moving ${s(paths.size, "item")} to the Recycle Bin", { p ->
-                val res = OpResult(); p.total = paths.size.toLong()
-                for ((root, list) in groups) { val b = AppState.binFor(root); val items = b.moveToBin(list, res); moved.add(b to items); p.add(list.size.toLong()) }
-                res
-            }) { r ->
-                AppState.tab.selection = emptySet()
-                if (r.errors.isNotEmpty()) report("Deleted", r)
-                else AppState.toast("Moved ${s(r.done, "item")} to the Recycle Bin", "Undo") {
-                    AppState.io { moved.forEach { (b, items) -> b.restore(items.map { it.id }.toSet()) }; AppState.onMain { AppState.changed(paths) } }
-                }
-            }
+    fun delete(entries: List<FileEntry>) {
+        if (entries.isEmpty()) return
+        val paths = entries.map { it.path }
+        val inBin = paths.all { it.contains("/.LumenBin/") }
+        val what = if (entries.size == 1) "\"${entries[0].name}\"" else "${entries.size} items"
+        if (Settings.s.useBin && !inBin) {
+            if (Settings.s.confirmDelete) AppState.dialog = Dlg.Confirm("Delete", "Move $what to the Recycle Bin?", "Move to Recycle Bin", false) { doTrash(paths) }
+            else doTrash(paths)
         } else {
-            val go = {
-                AppState.startJob("Deleting ${s(paths.size, "item")}", { p -> FileOps.deleteForever(paths, p) }) { r ->
-                    AppState.tab.selection = emptySet(); report("Deleted", r)
-                }
-                Unit
-            }
-            if (Settings.confirmDelete || permanent) {
-                AppState.dialog = Dialog.Confirm(
-                    "Delete permanently?", "${s(paths.size, "item")} will be permanently deleted. This can't be undone.",
-                    "Delete", danger = true, onConfirm = go
-                )
-            } else go()
+            AppState.dialog = Dlg.Confirm("Delete permanently", "$what will be deleted forever. This can't be undone.", "Delete", true) { doDeleteForever(paths) }
         }
     }
 
-    fun restore(items: List<BinEntry>, toDir: String? = null) {
-        AppState.startJob("Restoring ${s(items.size, "item")}", { _ ->
+    private fun doTrash(paths: List<String>) {
+        val trashed = ArrayList<Pair<RecycleBin, RecycleBin.Item>>()
+        AppState.startJob("Moving to Recycle Bin", { p ->
             val res = OpResult()
-            items.groupBy { it.bin }.forEach { (b, l) -> b.restore(l.map { it.item.id }.toSet(), res, toDir) }
+            p.total = paths.size.toLong()
+            for (path in paths) {
+                if (p.cancelled) { res.cancelled = true; break }
+                p.label = Paths.name(path)
+                val bin = AppState.binFor(path)
+                bin.trash(path).onSuccess { synchronized(trashed) { trashed += bin to it }; res.done++ }.onFailure { res.errors += "${Paths.name(path)}: ${it.message}" }
+                p.add(1)
+            }
             res
-        }) { r -> AppState.tab.selection = emptySet(); report("Restored", r) }
+        }) { r ->
+            AppState.selectionClear()
+            AppState.changed(paths, removed = paths)
+            if (r.done > 0) {
+                val items = synchronized(trashed) { ArrayList(trashed) }
+                AppState.toast(if (r.done == 1) "Moved to Recycle Bin" else "Moved ${r.done} items to Recycle Bin", "Undo") { restoreItems(items) }
+            } else report("Deleted", r)
+        }
     }
 
-    fun deleteFromBin(items: List<BinEntry>) {
-        AppState.dialog = Dialog.Confirm("Delete permanently?", "${s(items.size, "item")} will be permanently deleted.", "Delete", true) {
-            AppState.startJob("Deleting ${s(items.size, "item")}", { _ ->
-                val res = OpResult()
-                items.groupBy { it.bin }.forEach { (b, l) -> b.deleteForever(l.map { it.item.id }.toSet(), res) }
-                res
-            }) { r -> AppState.tab.selection = emptySet(); report("Deleted", r) }
+    private fun restoreItems(items: List<Pair<RecycleBin, RecycleBin.Item>>) {
+        AppState.startJob("Restoring", { p ->
+            val res = OpResult()
+            for ((bin, item) in items) bin.restore(item).onSuccess { res.done++; res.created += it.absolutePath }.onFailure { res.errors += "${item.name}: ${it.message}" }
+            p.total = 1; p.add(1)
+            res
+        }) { r ->
+            AppState.changed(r.created, added = r.created.map { File(it) }.filter { it.isFile }.map { FileOps.entry(it) })
+            AppState.toast(if (r.errors.isEmpty()) "Restored ${r.done} item${if (r.done == 1) "" else "s"}" else r.errors.first())
+        }
+    }
+
+    fun restore(items: List<Pair<RecycleBin, RecycleBin.Item>>) = restoreItems(items)
+
+    fun purge(items: List<Pair<RecycleBin, RecycleBin.Item>>) {
+        AppState.dialog = Dlg.Confirm("Delete permanently", "${items.size} item${if (items.size == 1) "" else "s"} will be deleted forever.", "Delete", true) {
+            AppState.startJob("Deleting", { p ->
+                p.total = 1
+                items.groupBy({ it.first }, { it.second.id }).forEach { (bin, ids) -> bin.purge(ids) }
+                p.add(1)
+                OpResult().apply { done = items.size }
+            }) { AppState.binVersion++; AppState.toast("Deleted permanently") }
         }
     }
 
     fun emptyBin() {
-        AppState.dialog = Dialog.Confirm("Empty Recycle Bin?", "Everything in the Recycle Bin will be permanently deleted.", "Empty", true) {
-            AppState.startJob("Emptying Recycle Bin", { _ -> val res = OpResult(); AppState.bins().forEach { it.empty(res) }; res }) { r -> report("Deleted", r) }
+        AppState.dialog = Dlg.Confirm("Empty Recycle Bin", "Everything in the Recycle Bin will be deleted forever.", "Empty", true) {
+            AppState.startJob("Emptying Recycle Bin", { p ->
+                p.total = 1
+                AppState.allBins().forEach { it.empty() }
+                p.add(1)
+                OpResult().apply { done = 1 }
+            }) { AppState.changed(); AppState.toast("Recycle Bin emptied") }
         }
     }
 
-    // ------------------------------------------------------------------ create / rename
-    fun rename(e: FileEntry, newName: String): String? {
-        val r = FileOps.rename(e.path, newName)
-        return if (r.isSuccess) {
-            val dst = r.getOrThrow()
-            if (Settings.isPinned(e.path)) Settings.pinned = Settings.pinned.map { if (it == e.path) dst.absolutePath else it }
-            if (Settings.isFavorite(e.path)) Settings.favorites = Settings.favorites.map { if (it == e.path) dst.absolutePath else it }
-            Settings.save()
-            AppState.tab.selection = setOf(dst.absolutePath)
-            AppState.changed(listOf(e.path, dst.absolutePath)); null
-        } else r.exceptionOrNull()?.message ?: "Couldn't rename"
+    private fun doDeleteForever(paths: List<String>) {
+        AppState.startJob("Deleting", { p -> p.total = paths.size.toLong(); FileOps.deleteForever(paths, p).also { p.add(paths.size.toLong()) } }) { r ->
+            AppState.selectionClear()
+            AppState.changed(paths, removed = paths)
+            report("Deleted", r)
+        }
     }
 
-    fun create(dir: String, name: String, folder: Boolean): String? {
-        val r = if (folder) FileOps.createFolder(dir, name) else FileOps.createFile(dir, name)
-        return if (r.isSuccess) {
-            val f = r.getOrThrow(); AppState.tab.selection = setOf(f.absolutePath); AppState.changed(listOf(f.absolutePath)); null
-        } else r.exceptionOrNull()?.message ?: "Couldn't create"
+    // ------------------------------------------------------------------ rename / create
+    fun rename(entry: FileEntry, newName: String): String? {
+        val r = FileOps.rename(File(entry.path), newName)
+        val f = r.getOrNull() ?: return r.exceptionOrNull()?.message ?: "Couldn't rename"
+        Settings.update {
+            copy(favorites = favorites.map { if (it == entry.path) f.absolutePath else it }, pinned = pinned.map { if (it == entry.path) f.absolutePath else it })
+        }
+        AppState.changed(listOf(entry.path, f.absolutePath), removed = listOf(entry.path), added = if (f.isFile) listOf(FileOps.entry(f)) else emptyList())
+        AppState.select(setOf(f.absolutePath))
+        return null
+    }
+
+    fun create(dir: String, folder: Boolean, name: String): String? {
+        val r = if (folder) FileOps.createFolder(File(dir), name) else FileOps.createFile(File(dir), name)
+        val f = r.getOrNull() ?: return r.exceptionOrNull()?.message ?: "Couldn't create"
+        AppState.changed(listOf(f.absolutePath))
+        AppState.select(setOf(f.absolutePath))
+        return null
     }
 
     // ------------------------------------------------------------------ archives
     fun compress(paths: List<String>, dir: String, name: String, format: ArchiveExtras.Format, level: Int, password: String?) {
-        val clean = name.trim().removeSuffix(".zip").removeSuffix(".7z").removeSuffix(".tar.gz").removeSuffix(".tar")
+        val clean = name.trim().removeSuffix(".zip").removeSuffix(".7z").removeSuffix(".tar.gz").removeSuffix(".tar").ifEmpty { "Archive" }
         val dest = FileOps.uniqueNumbered(File(dir), "$clean.${format.ext}")
         AppState.startJob("Compressing to ${dest.name}", { p -> ArchiveExtras.create(format, paths, dest, level, password, p) }) { r ->
+            AppState.changed(listOf(dest.absolutePath), added = if (dest.isFile) listOf(FileOps.entry(dest)) else emptyList())
             if (r.errors.isNotEmpty()) report("Compressed", r) else {
-                AppState.tab.selection = setOf(dest.absolutePath)
-                AppState.toast("Created ${dest.name}", "Open") { AppState.goDir(dir) }
+                AppState.select(setOf(dest.absolutePath))
+                AppState.toast("Created ${dest.name}")
             }
         }
     }
 
-    fun extract(path: String, dest: String, policy: Conflict, password: String? = null, openAfter: Boolean = true) {
+    fun extract(path: String, dest: String, policy: Conflict, password: String? = null) {
         val f = File(path)
         AppState.startJob("Extracting ${f.name}", { p -> ArchiveExtras.extract(f, File(dest), policy, p, password) }) { r ->
             val needPw = r.errors.any { it == "PASSWORD_REQUIRED" || it == "Wrong password." }
             if (needPw) {
-                AppState.dialog = Dialog.Password(if (r.errors.any { it == "Wrong password." }) "Wrong password. Try again." else "This archive is password protected.") { pw -> extract(path, dest, policy, pw, openAfter) }
-            } else if (r.errors.isNotEmpty() && r.done == 0) report("Extracted", r)
-            else {
-                AppState.toast("Extracted ${s(r.done.coerceAtLeast(1), "file")}", if (openAfter) "Show" else null) { AppState.goDir(dest) }
-                if (r.errors.isNotEmpty()) report("Extracted", r)
+                AppState.dialog = Dlg.Password(if (r.errors.any { it == "Wrong password." }) "Wrong password. Try again." else "This archive is password protected.") { pw -> extract(path, dest, policy, pw) }
+            } else {
+                AppState.changed(listOf(dest))
+                if (r.errors.isNotEmpty() && r.done == 0) report("Extracted", r)
+                else AppState.toast("Extracted ${r.done} file${if (r.done == 1) "" else "s"}", "Open") { AppState.goDir(dest) }
             }
         }
     }
 
-    // ------------------------------------------------------------------ open / share
-    private fun uri(path: String): Uri = FileProvider.getUriForFile(ctx, ctx.packageName + ".fileprovider", File(path))
+    // ------------------------------------------------------------------ opening
+    private val builtinImages = setOf("jpg", "jpeg", "jpe", "jfif", "png", "gif", "webp", "bmp", "heic", "heif", "hif", "avif", "ico", "dng")
+    private val textLike = setOf(Kind.TEXT, Kind.CODE)
 
-    private fun launch(i: Intent): Boolean = try { i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK); ctx.startActivity(i); true } catch (_: ActivityNotFoundException) { false } catch (_: Throwable) { false }
-
-    fun openExternal(path: String, chooser: Boolean = false) {
-        val f = File(path)
-        val mime = Mime.mimeOf(f.name)
-        if (Mime.kindOf(f.name) == Kind.APK && f.name.lowercase().endsWith(".apk")) { installApk(path); return }
-        val view = Intent(Intent.ACTION_VIEW).setDataAndType(uri(path), mime).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        val i = if (chooser) Intent.createChooser(view, "Open with") else view
-        if (!launch(i)) {
-            // retry with a generic type so the system chooser can offer any app
-            val generic = Intent(Intent.ACTION_VIEW).setDataAndType(uri(path), "*/*").addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            if (!launch(Intent.createChooser(generic, "Open with"))) AppState.toast("No app can open this type of file")
+    fun open(e: FileEntry, siblings: List<FileEntry>) {
+        if (e.isDir) { AppState.goDir(e.path); return }
+        when {
+            e.kind == Kind.IMAGE && e.ext in builtinImages -> {
+                val list = siblings.filter { (it.kind == Kind.IMAGE && it.ext in builtinImages) || (it.kind == Kind.VIDEO && !Mime.needsExternalPlayer(it.ext)) }
+                AppState.viewer = ViewerReq.Media(list, list.indexOfFirst { it.path == e.path }.coerceAtLeast(0))
+            }
+            e.kind == Kind.VIDEO && !Mime.needsExternalPlayer(e.ext) -> {
+                val list = siblings.filter { (it.kind == Kind.IMAGE && it.ext in builtinImages) || (it.kind == Kind.VIDEO && !Mime.needsExternalPlayer(it.ext)) }
+                AppState.viewer = ViewerReq.Media(list, list.indexOfFirst { it.path == e.path }.coerceAtLeast(0))
+            }
+            e.kind == Kind.AUDIO && e.ext !in setOf("mid", "midi", "kar", "m3u", "m3u8", "pls") -> AppState.viewer = ViewerReq.Audio(e)
+            e.kind == Kind.PDF -> AppState.viewer = ViewerReq.Pdf(e.path)
+            e.kind in textLike || e.ext in setOf("csv", "tsv", "html", "htm") -> {
+                if (e.size <= 2L * 1024 * 1024) AppState.viewer = ViewerReq.Text(e.path) else openExternal(e.path)
+            }
+            e.kind == Kind.APK -> installApk(e.path)
+            e.kind == Kind.ARCHIVE && Mime.isExtractable(e.name) -> AppState.dialog = Dlg.ArchiveList(e.path)
+            else -> openExternal(e.path)   // videos needing VLC etc, RAR, Apple docs, anything else: the system decides, ONCE
         }
     }
 
-    private fun installApk(path: String) {
-        val pm = ctx.packageManager
-        if (!pm.canRequestPackageInstalls()) {
-            AppState.toast("Allow Lumen Explorer to install apps first")
-            launch(Intent(AndroidSettings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:${ctx.packageName}")))
+    private fun uriFor(path: String): Uri = FileProvider.getUriForFile(AppState.app, "${AppState.app.packageName}.files", File(path))
+
+    /**
+     * Hands the file to another app exactly once per user tap.
+     * (Nothing in the UI calls this from composition/effects, and repeated calls for the same file within 2.5 s are ignored,
+     *  so returning from the external player can never re-launch it.)
+     */
+    fun openExternal(path: String, chooser: Boolean = false) {
+        val key = path
+        val now = System.currentTimeMillis()
+        if (key == lastOpenKey && now - lastOpenAt < 2500 && !chooser) return
+        lastOpenKey = key; lastOpenAt = now
+        try {
+            val uri = uriFor(path)
+            val mime = Mime.mimeOf(Paths.name(path)).takeIf { it != "*/*" } ?: AppState.app.contentResolver.getType(uri) ?: "*/*"
+            val view = Intent(Intent.ACTION_VIEW).setDataAndType(uri, mime).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            val intent = if (chooser) Intent.createChooser(view, "Open with") else view
+            ctx.startActivity(intent)
+        } catch (e: ActivityNotFoundException) {
+            AppState.toast("No app on this device can open .${Paths.ext(path)} files", "Open with…") { openExternal(path, chooser = true) }
+        } catch (e: Exception) {
+            AppState.toast("Couldn't open: ${e.message}")
+        }
+    }
+
+    fun installApk(path: String) {
+        if (!Perms.canInstall(AppState.app)) {
+            AppState.toast("Allow installing apps from Lumen Explorer first", "Allow") {
+                runCatching { ctx.startActivity(Perms.installIntent(AppState.app)) }
+            }
             return
         }
-        val i = Intent(Intent.ACTION_VIEW).setDataAndType(uri(path), "application/vnd.android.package-archive").addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        if (!launch(i)) AppState.toast("Couldn't start the installer")
+        try {
+            val i = Intent(Intent.ACTION_VIEW).setDataAndType(uriFor(path), "application/vnd.android.package-archive").addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            ctx.startActivity(i)
+        } catch (e: Exception) { AppState.toast("Couldn't start the installer: ${e.message}") }
     }
 
     fun share(paths: List<String>) {
-        val files = paths.map { File(it) }.filter { it.isFile }
-        if (files.isEmpty()) { AppState.toast(if (paths.isEmpty()) "Nothing to share" else "Folders can't be shared – compress them first"); return }
-        val mimes = files.map { Mime.mimeOf(it.name) }.distinct()
-        val type = when {
-            mimes.size == 1 -> mimes[0]
-            mimes.all { it.startsWith("image/") } -> "image/*"
-            mimes.all { it.startsWith("video/") } -> "video/*"
-            mimes.all { it.startsWith("audio/") } -> "audio/*"
-            else -> "*/*"
-        }
-        val i = if (files.size == 1) Intent(Intent.ACTION_SEND).putExtra(Intent.EXTRA_STREAM, uri(files[0].path))
-        else Intent(Intent.ACTION_SEND_MULTIPLE).putParcelableArrayListExtra(Intent.EXTRA_STREAM, ArrayList(files.map { uri(it.path) }))
-        i.type = type
-        i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        val chooser = Intent.createChooser(i, "Share")
-        if (!launch(chooser)) AppState.toast("Couldn't share")
-        if (files.size < paths.size) AppState.toast("Folders were skipped – only files can be shared")
-    }
-
-    fun copyPathText(paths: List<String>) {
-        val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-        cm.setPrimaryClip(ClipData.newPlainText("path", paths.joinToString("\n")))
-        AppState.toast(if (paths.size == 1) "Path copied" else "${paths.size} paths copied")
-    }
-
-    /** Opens a file the way Explorer would on double-click. */
-    fun open(e: FileEntry, siblings: List<FileEntry>) {
-        if (e.isDir) { AppState.goDir(e.path); return }
-        when (e.kind) {
-            Kind.IMAGE, Kind.VIDEO, Kind.AUDIO -> {
-                val same = siblings.filter { !it.isDir && it.kind == e.kind }
-                val list = if (same.size > 400) same.take(400) else same
-                val idx = list.indexOfFirst { it.path == e.path }.coerceAtLeast(0)
-                AppState.viewer = ViewerReq(list.map { it.path }, idx)
+        val files = paths.filter { File(it).isFile }
+        if (files.isEmpty()) { AppState.toast("Folders can't be shared directly — compress them first"); return }
+        try {
+            val i = if (files.size == 1) Intent(Intent.ACTION_SEND).apply {
+                type = Mime.mimeOf(Paths.name(files[0])); putExtra(Intent.EXTRA_STREAM, uriFor(files[0]))
+            } else Intent(Intent.ACTION_SEND_MULTIPLE).apply {
+                type = "*/*"; putParcelableArrayListExtra(Intent.EXTRA_STREAM, ArrayList(files.map { uriFor(it) }))
             }
-            Kind.TEXT -> if (e.size <= 2L * 1024 * 1024 && e.ext != "svg") AppState.viewer = ViewerReq(listOf(e.path), 0) else openExternal(e.path)
-            Kind.DOC -> if (e.ext == "pdf") AppState.viewer = ViewerReq(listOf(e.path), 0) else openExternal(e.path)
-            Kind.ARCHIVE -> if (Mime.isExtractable(e.name)) AppState.dialog = Dialog.Extract(e.path) else openExternal(e.path)
-            Kind.APK -> if (!e.name.lowercase().endsWith(".apk") && Mime.isExtractable(e.name)) AppState.dialog = Dialog.Extract(e.path) else openExternal(e.path)
-            else -> openExternal(e.path)
-        }
+            i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            ctx.startActivity(Intent.createChooser(i, "Share"))
+        } catch (e: Exception) { AppState.toast("Couldn't share: ${e.message}") }
+    }
+
+    fun copyPathText(path: String) {
+        val cm = AppState.app.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        cm.setPrimaryClip(ClipData.newPlainText("path", path))
+        AppState.toast("Path copied")
     }
 
     fun showInFolder(e: FileEntry) {
-        AppState.go(Loc.Dir(e.parent)); AppState.tab.selection = setOf(e.path)
+        AppState.goDir(e.parent)
+        AppState.select(setOf(e.path))
     }
 }

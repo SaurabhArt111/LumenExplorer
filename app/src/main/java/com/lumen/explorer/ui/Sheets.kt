@@ -1,21 +1,27 @@
+@file:OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
+
 package com.lumen.explorer.ui
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -24,25 +30,19 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.foundation.text.KeyboardActions
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.ArrowUpward
-import androidx.compose.material.icons.outlined.Close
-import androidx.compose.material.icons.outlined.ContentCopy
-import androidx.compose.material.icons.outlined.CreateNewFolder
-import androidx.compose.material.icons.outlined.RadioButtonChecked
-import androidx.compose.material.icons.outlined.RadioButtonUnchecked
+import androidx.compose.material.icons.filled.ArrowUpward
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
-import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
@@ -51,539 +51,352 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextRange
-import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.ImeAction
-import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.TextFieldValue
-import androidx.compose.ui.text.input.VisualTransformation
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog as ComposeDialog
-import androidx.compose.ui.window.DialogProperties
 import com.lumen.explorer.AppState
 import com.lumen.explorer.ArchiveExtras
 import com.lumen.explorer.Conflict
-import com.lumen.explorer.Dialog
+import com.lumen.explorer.Dlg
 import com.lumen.explorer.FileEntry
 import com.lumen.explorer.FileOps
+import com.lumen.explorer.JobState
 import com.lumen.explorer.Kind
 import com.lumen.explorer.Mime
 import com.lumen.explorer.Ops
 import com.lumen.explorer.Paths
 import com.lumen.explorer.Progress
-import com.lumen.explorer.Settings
+import com.lumen.explorer.Thumbs
 import com.lumen.explorer.Volumes
-import com.lumen.explorer.ZipCore
 import com.lumen.explorer.fmtDate
-import com.lumen.explorer.fmtDuration
 import com.lumen.explorer.fmtSize
-import com.lumen.explorer.hashAll
+import com.lumen.explorer.itemsLabel
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
 import java.io.File
 
-// ------------------------------------------------------------------------------------------ building blocks
-
+/**
+ * Centered card on wide screens, draggable bottom sheet on phones.
+ */
 @Composable
-fun WinField(
-    value: TextFieldValue, onChange: (TextFieldValue) -> Unit, modifier: Modifier = Modifier, placeholder: String = "",
-    password: Boolean = false, imeAction: ImeAction = ImeAction.Done, onDone: () -> Unit = {}, focus: Boolean = false, isError: Boolean = false,
-    keyboardType: KeyboardType = KeyboardType.Text,
+fun WinDialog(
+    title: String,
+    onDismiss: () -> Unit,
+    confirm: String? = null,
+    onConfirm: (() -> Unit)? = null,
+    confirmEnabled: Boolean = true,
+    danger: Boolean = false,
+    cancel: String = "Cancel",
+    content: @Composable ColumnScope.() -> Unit,
 ) {
-    val fr = remember { FocusRequester() }
-    if (focus) LaunchedEffect(Unit) { runCatching { fr.requestFocus() } }
-    Box(
-        modifier.fillMaxWidth().clip(RoundedCornerShape(6.dp)).background(Win.c.surface)
-            .border(1.dp, if (isError) Win.c.danger else Win.c.stroke, RoundedCornerShape(6.dp)).padding(horizontal = 12.dp, vertical = 11.dp),
-    ) {
-        if (value.text.isEmpty() && placeholder.isNotEmpty()) Txt(placeholder, size = 15.sp, color = Win.c.textDim)
-        BasicTextField(
-            value, onChange, singleLine = true, textStyle = TextStyle(color = Win.c.text, fontSize = 15.sp),
-            cursorBrush = SolidColor(Win.c.accent),
-            visualTransformation = if (password) PasswordVisualTransformation() else VisualTransformation.None,
-            keyboardOptions = KeyboardOptions(imeAction = imeAction, keyboardType = if (password) KeyboardType.Password else keyboardType),
-            keyboardActions = KeyboardActions(onDone = { onDone() }, onGo = { onDone() }),
-            modifier = Modifier.fillMaxWidth().focusRequester(fr),
-        )
+    val c = Win.c
+    val wide = LocalWide.current
+    val buttons: @Composable () -> Unit = {
+        Row(Modifier.fillMaxWidth().padding(top = 16.dp), horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.End)) {
+            GhostButton(cancel, onDismiss, Modifier.weight(1f, fill = !wide).let { if (wide) Modifier.widthIn(min = 100.dp) else it })
+            if (confirm != null && onConfirm != null) PrimaryButton(confirm, onConfirm, Modifier.weight(1f, fill = !wide).let { if (wide) Modifier.widthIn(min = 100.dp) else it }, enabled = confirmEnabled, danger = danger)
+        }
     }
-}
-
-@Composable
-fun WinDialog(onDismiss: () -> Unit, title: String, content: @Composable ColumnScope.() -> Unit, buttons: @Composable RowScope.() -> Unit) {
-    ComposeDialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-        Column(
-            Modifier.fillMaxWidth(0.92f).widthIn(max = 440.dp).clip(RoundedCornerShape(12.dp)).background(Win.c.card)
-                .border(1.dp, Win.c.stroke, RoundedCornerShape(12.dp)).padding(20.dp),
+    if (wide) {
+        BackHandler { onDismiss() }
+        Box(
+            Modifier.fillMaxSize().background(c.scrim).clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { onDismiss() }.imePadding(),
+            contentAlignment = Alignment.Center
         ) {
-            Txt(title, size = 18.sp, weight = FontWeight.SemiBold, maxLines = 2)
-            Spacer(Modifier.height(12.dp))
-            content()
-            Spacer(Modifier.height(16.dp))
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End), verticalAlignment = Alignment.CenterVertically) { buttons() }
-        }
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun SimpleSheet(onDismiss: () -> Unit, fullHeight: Boolean = false, content: @Composable ColumnScope.() -> Unit) {
-    val state = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    ModalBottomSheet(
-        onDismissRequest = onDismiss, sheetState = state, containerColor = Win.c.card, contentColor = Win.c.text,
-        shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp),
-    ) {
-        if (fullHeight) Column(Modifier.fillMaxWidth().fillMaxHeight(0.86f).navigationBarsPadding(), content = content)
-        else Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).navigationBarsPadding().padding(bottom = 16.dp), content = content)
-    }
-}
-
-@Composable
-private fun SheetHeader(entries: List<FileEntry>) {
-    Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-        if (entries.size == 1) {
-            val e = entries[0]
-            Thumb(e, 48.dp); Spacer(Modifier.width(14.dp))
-            Column(Modifier.weight(1f)) {
-                Txt(e.name, size = 16.sp, weight = FontWeight.SemiBold, maxLines = 2)
-                Txt(e.typeLabel + (if (!e.isDir) "  ·  " + fmtSize(e.size) else ""), size = 12.sp, color = Win.c.textDim)
+            Column(
+                Modifier.width(460.dp).heightIn(max = 640.dp).clip(RoundedCornerShape(14.dp)).background(c.card).border(1.dp, c.stroke, RoundedCornerShape(14.dp))
+                    .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { }.padding(22.dp)
+            ) {
+                Txt(title, 19.sp, FontWeight.SemiBold, modifier = Modifier.padding(bottom = 12.dp))
+                Column(Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState())) { content() }
+                buttons()
             }
-        } else {
-            Txt("${entries.size} items selected", size = 16.sp, weight = FontWeight.SemiBold)
+        }
+    } else {
+        DragSheet(onDismiss = onDismiss, title = title) {
+            Column(Modifier.padding(start = 20.dp, end = 20.dp, bottom = 16.dp)) { content(); buttons() }
         }
     }
 }
 
-// ------------------------------------------------------------------------------------------ host
+private fun copyText(ctx: Context, text: String) {
+    (ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("text", text))
+    AppState.toast("Copied")
+}
+
+private fun baseNameRange(name: String): TextRange {
+    val dot = name.lastIndexOf('.')
+    return if (dot > 0) TextRange(0, dot) else TextRange(0, name.length)
+}
 
 @Composable
 fun DialogHost() {
     val d = AppState.dialog ?: return
-    val dismiss = { AppState.dialog = null }
+    val close: () -> Unit = { AppState.dialog = null }
+    val ctx = LocalContext.current
+    val c = Win.c
     when (d) {
-        is Dialog.Rename -> RenameDialog(d, dismiss)
-        is Dialog.NewItem -> NewItemDialog(d, dismiss)
-        is Dialog.Confirm -> WinDialog(dismiss, d.title, { Txt(d.message, size = 15.sp, maxLines = 6) }) {
-            GhostButton("Cancel", dismiss)
-            Box(Modifier.clip(RoundedCornerShape(6.dp)).background(if (d.danger) Win.c.danger else Win.c.accent).clickable { dismiss(); d.onConfirm() }.padding(horizontal = 20.dp, vertical = 10.dp)) {
-                Txt(d.confirm, size = 14.sp, color = Color.White, weight = FontWeight.SemiBold)
+        is Dlg.Rename -> {
+            var tf by remember { mutableStateOf(TextFieldValue(d.entry.name, baseNameRange(d.entry.name))) }
+            var err by remember { mutableStateOf<String?>(null) }
+            val go: () -> Unit = { val e = Ops.rename(d.entry, tf.text); if (e == null) close() else { err = e } }
+            WinDialog("Rename", close, "Rename", { go() }, tf.text.isNotBlank()) {
+                WinField(tf, { tf = it; err = null }, autoFocus = true, error = err != null, onDone = { go() })
+                if (err != null) Txt(err!!, 12.sp, color = c.danger, modifier = Modifier.padding(top = 6.dp), maxLines = 2)
             }
         }
-        is Dialog.Conflicts -> WinDialog(dismiss, "Replace or skip files",
-            {
-                Txt("${d.names.size} item${if (d.names.size == 1) "" else "s"} already exist in the destination:", size = 14.sp, maxLines = 2)
-                Spacer(Modifier.height(6.dp))
-                Txt(d.names.take(5).joinToString("\n") + if (d.names.size > 5) "\n…" else "", size = 13.sp, color = Win.c.textDim, maxLines = 7)
-                Spacer(Modifier.height(14.dp))
-                ConflictChoice("Replace the files in the destination", "Existing files are overwritten") { dismiss(); d.onChoose(Conflict.REPLACE) }
-                ConflictChoice("Skip these files", "Existing files are left alone") { dismiss(); d.onChoose(Conflict.SKIP) }
-                ConflictChoice("Keep both files", "The new files get a number, like “name (1)”") { dismiss(); d.onChoose(Conflict.KEEP_BOTH) }
-            }) { GhostButton("Cancel", dismiss) }
-        is Dialog.Compress -> CompressSheet(d, dismiss)
-        is Dialog.Extract -> ExtractSheet(d, dismiss)
-        is Dialog.Password -> PasswordDialog(d, dismiss)
-        is Dialog.Properties -> SimpleSheet(dismiss) { PropertiesContent(d.entries, dismiss) }
-        is Dialog.Context -> ActionSheet(
-            title = null, entries = Actions.contextEntries(d.entries, AppState.tab, AppState.tab.shown),
-            header = { SheetHeader(d.entries) }, quick = Actions.contextQuick(d.entries, AppState.tab), onDismiss = dismiss,
-        )
-        is Dialog.Picker -> PickerSheet(d, dismiss)
-        is Dialog.Info -> WinDialog(dismiss, d.title, {
-            Column(Modifier.heightIn(max = 260.dp).verticalScroll(rememberScrollState())) { d.lines.forEach { Txt(it, size = 13.sp, color = Win.c.textDim, maxLines = 3, modifier = Modifier.padding(vertical = 2.dp)) } }
-        }) { PrimaryButton("OK", dismiss) }
-        is Dialog.Hash -> HashDialog(d, dismiss)
-        is Dialog.Jobs -> JobsSheet(dismiss)
+        is Dlg.NewItem -> {
+            var tf by remember { mutableStateOf(TextFieldValue(d.initial, if (d.folder) TextRange(0, d.initial.length) else baseNameRange(d.initial))) }
+            var err by remember { mutableStateOf<String?>(null) }
+            val go: () -> Unit = { val e = Ops.create(d.dir, d.folder, tf.text); if (e == null) close() else { err = e } }
+            WinDialog(if (d.folder) "New folder" else "New file", close, "Create", { go() }, tf.text.isNotBlank()) {
+                WinField(tf, { tf = it; err = null }, autoFocus = true, error = err != null, onDone = { go() })
+                if (err != null) Txt(err!!, 12.sp, color = c.danger, modifier = Modifier.padding(top = 6.dp), maxLines = 2)
+                Txt("in ${d.dir}", 12.sp, color = c.text2, modifier = Modifier.padding(top = 8.dp))
+            }
+        }
+        is Dlg.Confirm -> WinDialog(d.title, close, d.confirm, { close(); d.onYes() }, danger = d.danger) { Txt(d.message, 15.sp, maxLines = 8) }
+        is Dlg.Info -> WinDialog(d.title, close, null, null, cancel = "OK") { Txt(d.message, 15.sp, maxLines = 12) }
+        is Dlg.Conflicts -> WinDialog("Name conflict", close, null, null) {
+            Txt("${itemsLabel(d.names.size)} with the same name already exist in the destination:", 14.sp, maxLines = 3)
+            Txt(d.names.take(4).joinToString("\n") + if (d.names.size > 4) "\n…and ${d.names.size - 4} more" else "", 13.sp, color = c.text2, maxLines = 6, modifier = Modifier.padding(vertical = 8.dp))
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                PrimaryButton("Keep both (rename)", { close(); Ops.transferTo(d.sources, d.dest, d.move, Conflict.KEEP_BOTH) }, Modifier.fillMaxWidth())
+                GhostButton("Replace existing", { close(); Ops.transferTo(d.sources, d.dest, d.move, Conflict.REPLACE) }, Modifier.fillMaxWidth())
+                GhostButton("Skip these", { close(); Ops.transferTo(d.sources, d.dest, d.move, Conflict.SKIP) }, Modifier.fillMaxWidth())
+            }
+        }
+        is Dlg.Compress -> CompressDialog(d, close)
+        is Dlg.Extract -> ExtractDialog(d, close)
+        is Dlg.Password -> {
+            var pw by remember { mutableStateOf("") }
+            WinDialog("Password required", close, "OK", { close(); d.onPassword(pw) }, pw.isNotEmpty()) {
+                Txt(d.message, 14.sp, color = c.text2, maxLines = 3, modifier = Modifier.padding(bottom = 10.dp))
+                WinField(pw, { pw = it }, autoFocus = true, password = true, placeholder = "Password", onDone = { if (pw.isNotEmpty()) { close(); d.onPassword(pw) } })
+            }
+        }
+        is Dlg.Properties -> PropertiesDialog(d, close)
+        is Dlg.Picker -> PickerDialog(d, close)
+        is Dlg.Hash -> HashDialog(d, close)
+        is Dlg.ArchiveList -> ArchiveListDialog(d, close)
+        Dlg.Jobs -> JobsDialog(close)
+        is Dlg.Context -> { }
     }
 }
 
+// ---------------------------------------------------------------------------------------------- compress
 @Composable
-private fun ConflictChoice(title: String, sub: String, onClick: () -> Unit) {
-    Column(Modifier.fillMaxWidth().padding(vertical = 3.dp).clip(RoundedCornerShape(8.dp)).border(1.dp, Win.c.stroke, RoundedCornerShape(8.dp)).clickable(onClick = onClick).padding(12.dp)) {
-        Txt(title, size = 14.sp, weight = FontWeight.SemiBold, maxLines = 2)
-        Txt(sub, size = 12.sp, color = Win.c.textDim, maxLines = 2)
-    }
-}
-
-// ------------------------------------------------------------------------------------------ rename / new
-
-@Composable
-private fun RenameDialog(d: Dialog.Rename, dismiss: () -> Unit) {
-    val e = d.entry
-    val baseLen = if (e.isDir || e.ext.isEmpty()) e.name.length else e.name.length - e.ext.length - 1
-    var tf by remember { mutableStateOf(TextFieldValue(e.name, TextRange(0, baseLen))) }
-    var err by remember { mutableStateOf<String?>(null) }
-    fun go() { val r = Ops.rename(e, tf.text); if (r == null) dismiss() else err = r }
-    WinDialog(dismiss, "Rename", {
-        WinField(tf, { tf = it; err = null }, focus = true, isError = err != null, onDone = ::go)
-        err?.let { Txt(it, Modifier.padding(top = 6.dp), 13.sp, Win.c.danger, maxLines = 3) }
-    }) { GhostButton("Cancel", dismiss); PrimaryButton("Rename", ::go) }
-}
-
-@Composable
-private fun NewItemDialog(d: Dialog.NewItem, dismiss: () -> Unit) {
-    val dot = d.initial.lastIndexOf('.')
-    val sel = if (!d.folder && dot > 0) TextRange(0, dot) else TextRange(0, d.initial.length)
-    var tf by remember { mutableStateOf(TextFieldValue(d.initial, sel)) }
-    var err by remember { mutableStateOf<String?>(null) }
-    fun go() { val r = Ops.create(d.dir, tf.text, d.folder); if (r == null) dismiss() else err = r }
-    WinDialog(dismiss, if (d.folder) "New folder" else "New file", {
-        WinField(tf, { tf = it; err = null }, focus = true, isError = err != null, onDone = ::go)
-        err?.let { Txt(it, Modifier.padding(top = 6.dp), 13.sp, Win.c.danger, maxLines = 3) }
-    }) { GhostButton("Cancel", dismiss); PrimaryButton("Create", ::go) }
-}
-
-@Composable
-private fun PasswordDialog(d: Dialog.Password, dismiss: () -> Unit) {
-    var tf by remember { mutableStateOf(TextFieldValue("")) }
-    fun go() { if (tf.text.isNotEmpty()) { dismiss(); d.onSubmit(tf.text) } }
-    WinDialog(dismiss, "Password required", {
-        Txt(d.message, size = 14.sp, color = Win.c.textDim, maxLines = 3, modifier = Modifier.padding(bottom = 10.dp))
-        WinField(tf, { tf = it }, placeholder = "Password", password = true, focus = true, onDone = ::go)
-    }) { GhostButton("Cancel", dismiss); PrimaryButton("OK", ::go, enabled = tf.text.isNotEmpty()) }
-}
-
-// ------------------------------------------------------------------------------------------ compress
-
-@Composable
-private fun CompressSheet(d: Dialog.Compress, dismiss: () -> Unit) {
-    val base = ZipCore.suggestedZipName(d.paths).removeSuffix(".zip")
-    var name by remember { mutableStateOf(TextFieldValue(base, TextRange(0, base.length))) }
+private fun CompressDialog(d: Dlg.Compress, close: () -> Unit) {
+    val c = Win.c
+    val first = File(d.paths[0])
+    var name by remember { mutableStateOf(TextFieldValue(if (d.paths.size == 1) first.nameWithoutExtension.ifEmpty { first.name } else (first.parentFile?.name ?: "Archive"), TextRange(0, 200))) }
     var format by remember { mutableStateOf(ArchiveExtras.Format.ZIP) }
     var level by remember { mutableIntStateOf(6) }
-    var pw by remember { mutableStateOf(TextFieldValue("")) }
-    val aes = format == ArchiveExtras.Format.ZIP_AES
-    val valid = name.text.isNotBlank() && FileOps.validName(name.text) == null && (!aes || pw.text.isNotEmpty())
-    SimpleSheet(dismiss) {
-        Txt("Compress ${if (d.paths.size == 1) File(d.paths[0]).name else "${d.paths.size} items"}", Modifier.padding(horizontal = 20.dp, vertical = 6.dp), 18.sp, weight = FontWeight.SemiBold, maxLines = 2)
-        Column(Modifier.padding(horizontal = 20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Txt("Archive name", size = 12.sp, color = Win.c.textDim)
-            WinField(name, { name = it }, focus = true)
-            Txt("Format", size = 12.sp, color = Win.c.textDim)
-            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                ArchiveExtras.Format.values().forEach { f -> Chip(f.label, format == f, { format = f }) }
-            }
-            if (format == ArchiveExtras.Format.ZIP || aes) {
-                Txt("Compression", size = 12.sp, color = Win.c.textDim)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    listOf("Store" to 0, "Fast" to 3, "Normal" to 6, "Maximum" to 9).forEach { (l, v) -> Chip(l, level == v, { level = v }) }
+    var pw by remember { mutableStateOf("") }
+    val needPw = format == ArchiveExtras.Format.ZIP_AES
+    WinDialog("Compress", close, "Create", {
+        close(); Ops.compress(d.paths, d.dir, name.text, format, level, if (needPw) pw else null)
+    }, name.text.isNotBlank() && (!needPw || pw.length >= 4)) {
+        Txt("${itemsLabel(d.paths.size)} → ${name.text.trim()}.${format.ext}", 13.sp, color = c.text2, modifier = Modifier.padding(bottom = 8.dp), maxLines = 2)
+        WinField(name, { name = it }, autoFocus = true, placeholder = "Archive name")
+        Txt("Format", 12.sp, FontWeight.SemiBold, c.accent, Modifier.padding(top = 14.dp, bottom = 6.dp))
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            ArchiveExtras.Format.values().toList().chunked(3).forEach { rowItems ->
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    rowItems.forEach { f -> Chip(f.label, format == f, { format = f }) }
                 }
             }
-            if (aes) {
-                Txt("Password", size = 12.sp, color = Win.c.textDim)
-                WinField(pw, { pw = it }, placeholder = "Password", password = true)
-                Txt("Files are encrypted with AES-256. You'll need this password to open the archive.", size = 12.sp, color = Win.c.textDim, maxLines = 3)
-            }
-            Txt("Will be created in ${Paths.name(d.dir)}", size = 12.sp, color = Win.c.textDim)
-            Row(Modifier.fillMaxWidth().padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End)) {
-                GhostButton("Cancel", dismiss)
-                PrimaryButton("Compress", {
-                    dismiss(); Ops.compress(d.paths, d.dir, name.text, format, level, if (aes) pw.text else null)
-                }, enabled = valid)
-            }
+        }
+        if (format == ArchiveExtras.Format.ZIP || format == ArchiveExtras.Format.ZIP_AES) {
+            SliderRow("Compression", level.toFloat(), 0f..9f, { if (it.toInt() == 0) "Store" else if (it.toInt() >= 8) "Maximum" else "Level ${it.toInt()}" }, { level = it.toInt() }, Modifier.padding(top = 6.dp), steps = 8)
+        }
+        if (needPw) {
+            Txt("Password (min 4 characters)", 12.sp, FontWeight.SemiBold, c.accent, Modifier.padding(top = 8.dp, bottom = 6.dp))
+            WinField(pw, { pw = it }, password = true, placeholder = "Password")
+            Txt("AES-256 encrypted. If you forget it, the files can't be recovered.", 11.sp, color = c.text2, maxLines = 2, modifier = Modifier.padding(top = 6.dp))
         }
     }
 }
 
-// ------------------------------------------------------------------------------------------ extract
-
+// ---------------------------------------------------------------------------------------------- extract
 @Composable
-private fun ExtractSheet(d: Dialog.Extract, dismiss: () -> Unit) {
+private fun ExtractDialog(d: Dlg.Extract, close: () -> Unit) {
+    val c = Win.c
     val f = File(d.path)
-    val items by produceState<List<ZipCore.Item>?>(null, d.path) { value = withContext(Dispatchers.IO) { runCatching { ArchiveExtras.list(f) }.getOrDefault(emptyList()) } }
-    var where by remember { mutableIntStateOf(0) }
-    var custom by remember { mutableStateOf<String?>(null) }
-    val parent = f.parent ?: Volumes.primaryRoot()
-    val folderName = ZipCore.baseNameForExtract(f.name)
-    SimpleSheet(dismiss) {
-        Row(Modifier.padding(horizontal = 20.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-            FileGlyph(Kind.ARCHIVE, f.extension, 44.dp); Spacer(Modifier.width(14.dp))
-            Column(Modifier.weight(1f)) {
-                Txt(f.name, size = 16.sp, weight = FontWeight.SemiBold, maxLines = 2)
-                val it = items
-                Txt(
-                    if (it == null) "Reading archive…" else if (it.isEmpty()) fmtSize(f.length()) else "${it.count { x -> !x.isDir }} files  ·  ${fmtSize(f.length())} compressed",
-                    size = 12.sp, color = Win.c.textDim,
-                )
-            }
+    val folderName = f.name.let { n -> listOf(".tar.gz", ".tar.bz2", ".tar.xz").firstOrNull { n.lowercase().endsWith(it) }?.let { n.dropLast(it.length) } ?: n.substringBeforeLast('.') }
+    var where by remember { mutableIntStateOf(1) }       // 0 here, 1 new folder, 2 choose
+    var policy by remember { mutableStateOf(Conflict.KEEP_BOTH) }
+    val parent = f.parent ?: "/"
+    WinDialog("Extract", close, if (where == 2) "Choose folder…" else "Extract", {
+        when (where) {
+            0 -> { close(); Ops.extract(d.path, parent, policy) }
+            1 -> { close(); Ops.extract(d.path, Paths.join(parent, folderName), policy) }
+            else -> { close(); AppState.dialog = Dlg.Picker("Extract to…", parent) { dest -> Ops.extract(d.path, dest, policy) } }
         }
-        Column(Modifier.padding(horizontal = 12.dp)) {
-            RadioRow("Extract to a new folder “$folderName”", where == 0) { where = 0 }
-            RadioRow("Extract here", where == 1) { where = 1 }
-            RadioRow(custom?.let { "Choose folder: ${Paths.name(it)}" } ?: "Choose folder…", where == 2) {
-                AppState.dialog = Dialog.Picker("Extract to", "Extract here", parent) { picked ->
-                    Ops.extract(d.path, picked, Conflict.KEEP_BOTH)
-                }
-            }
+    }) {
+        Txt(f.name, 14.sp, FontWeight.Medium, maxLines = 2)
+        Txt("Where", 12.sp, FontWeight.SemiBold, c.accent, Modifier.padding(top = 14.dp, bottom = 6.dp))
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Chip("Here", where == 0, { where = 0 })
+            Chip("In a new folder “$folderName”", where == 1, { where = 1 })
+            Chip("Another folder…", where == 2, { where = 2 })
         }
-        val list = items
-        if (!list.isNullOrEmpty()) {
-            Txt("Contents", Modifier.padding(start = 20.dp, top = 10.dp, bottom = 4.dp), 12.sp, Win.c.textDim, FontWeight.SemiBold)
-            Column(Modifier.padding(horizontal = 20.dp)) {
-                list.take(40).forEach { x ->
-                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 2.dp)) {
-                        Txt(x.name, Modifier.weight(1f), 12.sp, Win.c.text)
-                        if (!x.isDir && x.size >= 0) Txt(fmtSize(x.size), Modifier.padding(start = 8.dp), 11.sp, Win.c.textDim)
-                    }
-                }
-                if (list.size > 40) Txt("… and ${list.size - 40} more", size = 12.sp, color = Win.c.textDim)
-            }
-        }
-        Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 14.dp), horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End)) {
-            GhostButton("Open with…", { dismiss(); Ops.openExternal(d.path, chooser = true) })
-            PrimaryButton("Extract", {
-                dismiss()
-                val dest = when (where) {
-                    0 -> FileOps.uniqueNumbered(File(parent), folderName).path
-                    else -> parent
-                }
-                Ops.extract(d.path, dest, Conflict.KEEP_BOTH)
-            })
+        Txt("If a file already exists", 12.sp, FontWeight.SemiBold, c.accent, Modifier.padding(top = 14.dp, bottom = 6.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Chip("Keep both", policy == Conflict.KEEP_BOTH, { policy = Conflict.KEEP_BOTH })
+            Chip("Replace", policy == Conflict.REPLACE, { policy = Conflict.REPLACE })
+            Chip("Skip", policy == Conflict.SKIP, { policy = Conflict.SKIP })
         }
     }
 }
 
+// ---------------------------------------------------------------------------------------------- properties
 @Composable
-private fun RadioRow(label: String, selected: Boolean, onClick: () -> Unit) {
-    Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).clickable(onClick = onClick).padding(horizontal = 8.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-        Icon(if (selected) Icons.Outlined.RadioButtonChecked else Icons.Outlined.RadioButtonUnchecked, null, tint = if (selected) Win.c.accent else Win.c.textDim, modifier = Modifier.size(22.dp))
-        Spacer(Modifier.width(12.dp))
-        Txt(label, size = 15.sp, maxLines = 2)
-    }
-}
-
-// ------------------------------------------------------------------------------------------ folder picker
-
-@Composable
-private fun PickerSheet(d: Dialog.Picker, dismiss: () -> Unit) {
-    var cur by remember { mutableStateOf<String?>(d.startDir.takeIf { File(it).isDirectory } ?: Volumes.primaryRoot()) }
-    var newName by remember { mutableStateOf<TextFieldValue?>(null) }
-    var err by remember { mutableStateOf<String?>(null) }
-    val vols = AppState.volumes
-    val kids by produceState<List<FileEntry>>(emptyList(), cur, AppState.rev) {
-        val c = cur
-        value = if (c == null) emptyList() else withContext(Dispatchers.IO) { FileOps.list(c, Settings.showHidden)?.filter { it.isDir }?.sortedBy { it.name.lowercase() } ?: emptyList() }
-    }
-    SimpleSheet(dismiss, fullHeight = true) {
-        Txt(d.title, Modifier.padding(horizontal = 20.dp, vertical = 4.dp), 18.sp, weight = FontWeight.SemiBold)
-        Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconBtn(Icons.Outlined.ArrowUpward, "Up", {
-                val c = cur
-                cur = when {
-                    c == null -> null
-                    vols.any { it.path == c } -> null
-                    else -> Paths.parent(c)
-                }
-            }, enabled = cur != null)
-            Txt(cur ?: "This device", Modifier.weight(1f).padding(horizontal = 6.dp), 13.sp, Win.c.textDim)
-            if (cur != null) IconBtn(Icons.Outlined.CreateNewFolder, "New folder", { newName = TextFieldValue("New folder", TextRange(0, 10)); err = null })
-        }
-        newName?.let { nn ->
-            Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.weight(1f)) {
-                    WinField(nn, { newName = it; err = null }, focus = true, isError = err != null, onDone = {
-                        val r = FileOps.createFolder(cur!!, newName!!.text)
-                        if (r.isSuccess) { val p = r.getOrThrow().absolutePath; newName = null; cur = p; AppState.rev++ } else err = r.exceptionOrNull()?.message
-                    })
-                }
-                Spacer(Modifier.width(8.dp))
-                IconBtn(Icons.Outlined.Close, "Cancel", { newName = null })
+private fun PropertiesDialog(d: Dlg.Properties, close: () -> Unit) {
+    val c = Win.c
+    val ctx = LocalContext.current
+    val tally by produceState<FileOps.Tally?>(null, d.paths) { value = withContext(Dispatchers.IO) { FileOps.tally(d.paths) { !isActive } } }
+    val single = d.paths.singleOrNull()?.let { File(it) }
+    val entry = single?.let { FileOps.entry(it) }
+    val apk by produceState<String?>(null, d.paths) { value = if (entry?.kind == Kind.APK) withContext(Dispatchers.IO) { Thumbs.apkInfo(entry.path) } else null }
+    WinDialog("Properties", close, null, null, cancel = "Close") {
+        if (entry != null) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Thumb(entry, 56.dp)
+                Spacer(Modifier.width(14.dp))
+                Column { Txt(entry.name, 16.sp, FontWeight.SemiBold, maxLines = 3); Txt(Mime.typeLabel(entry), 12.sp, color = c.text2) }
             }
-            err?.let { Txt(it, Modifier.padding(horizontal = 20.dp), 12.sp, Win.c.danger) }
+            Spacer(Modifier.height(10.dp))
+            HDivider()
+            InfoLine("Location", entry.parent)
+            if (apk != null) InfoLine("App", apk!!)
+            InfoLine("Modified", fmtDate(entry.modified))
+            if (File(entry.path).canRead()) InfoLine("Permissions", (if (File(entry.path).canRead()) "r" else "-") + (if (File(entry.path).canWrite()) "w" else "-") + (if (File(entry.path).canExecute()) "x" else "-"))
+        } else {
+            Txt("${d.paths.size} items selected", 16.sp, FontWeight.SemiBold)
+            Spacer(Modifier.height(8.dp)); HDivider()
         }
-        HDivider(Modifier.padding(top = 4.dp))
-        LazyColumn(Modifier.weight(1f)) {
-            if (cur == null) {
-                items(vols.size) { i ->
-                    val v = vols[i]
-                    Row(Modifier.fillMaxWidth().clickable { cur = v.path }.padding(horizontal = 20.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Icon(volumeIcon(v), null, tint = Win.c.accent, modifier = Modifier.size(26.dp)); Spacer(Modifier.width(14.dp))
-                        Txt(v.label, size = 15.sp)
-                    }
-                }
-            } else {
-                items(kids, key = { it.path }) { k ->
-                    Row(Modifier.fillMaxWidth().clickable { cur = k.path }.padding(horizontal = 20.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-                        FolderGlyph(28.dp); Spacer(Modifier.width(14.dp)); Txt(k.name, size = 15.sp)
-                    }
-                }
-                if (kids.isEmpty()) item { Txt("No subfolders", Modifier.padding(20.dp), 14.sp, Win.c.textDim) }
-            }
+        val t = tally
+        if (t == null) Row(Modifier.padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+            CircularProgressIndicator(Modifier.size(18.dp), color = c.accent, strokeWidth = 2.dp); Spacer(Modifier.width(10.dp)); Txt("Calculating size…", 13.sp, color = c.text2)
+        } else {
+            InfoLine("Size", "${fmtSize(t.bytes)}  (${"%,d".format(t.bytes)} bytes)")
+            if (t.folders > 0 || entry?.isDir == true) InfoLine("Contains", "${t.files} file${if (t.files == 1) "" else "s"}, ${(t.folders - if (entry?.isDir == true || d.paths.size > 1) 0 else 0).coerceAtLeast(0)} folder${if (t.folders == 1) "" else "s"}")
         }
-        HDivider()
-        Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End)) {
-            GhostButton("Cancel", dismiss)
-            PrimaryButton(d.actionLabel, { val c = cur; if (c != null) { dismiss(); d.onPick(c) } }, enabled = cur != null)
+        if (entry != null && !entry.isDir) {
+            Spacer(Modifier.height(10.dp))
+            GhostButton("Checksums (MD5 / SHA-1 / SHA-256)", { close(); AppState.dialog = Dlg.Hash(entry.path) }, Modifier.fillMaxWidth())
         }
     }
 }
 
-// ------------------------------------------------------------------------------------------ jobs
-
+// ---------------------------------------------------------------------------------------------- hashes
 @Composable
-private fun JobsSheet(dismiss: () -> Unit) {
-    SimpleSheet(dismiss) {
-        Txt("Operations", Modifier.padding(horizontal = 20.dp, vertical = 6.dp), 18.sp, weight = FontWeight.SemiBold)
-        if (AppState.jobs.isEmpty()) Txt("Nothing is running.", Modifier.padding(20.dp), 14.sp, Win.c.textDim)
-        for (j in AppState.jobs) {
-            Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp)) {
+private fun HashDialog(d: Dlg.Hash, close: () -> Unit) {
+    val c = Win.c
+    val ctx = LocalContext.current
+    val file = File(d.path)
+    val hashes by produceState<List<Pair<String, String>>?>(null, d.path) {
+        value = withContext(Dispatchers.IO) {
+            listOf("MD5", "SHA-1", "SHA-256").map { it to runCatching { FileOps.hash(file, it) }.getOrDefault("error") }
+        }
+    }
+    WinDialog("Checksums", close, null, null, cancel = "Close") {
+        Txt(file.name, 14.sp, FontWeight.Medium, maxLines = 2)
+        val h = hashes
+        if (h == null) Row(Modifier.padding(vertical = 14.dp), verticalAlignment = Alignment.CenterVertically) {
+            CircularProgressIndicator(Modifier.size(20.dp), color = c.accent, strokeWidth = 2.dp); Spacer(Modifier.width(10.dp)); Txt("Reading ${fmtSize(file.length())}…", 13.sp, color = c.text2)
+        } else h.forEach { (algo, value) ->
+            Column(Modifier.fillMaxWidth().clickable { copyText(ctx, value) }.padding(vertical = 8.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) { Txt(algo, 12.sp, FontWeight.SemiBold, c.accent, Modifier.weight(1f)); Icon(Icons.Filled.ContentCopy, "Copy", tint = c.text2, modifier = Modifier.size(15.dp)) }
+                Txt(value, 12.sp, mono = true, maxLines = 3, overflow = androidx.compose.ui.text.style.TextOverflow.Clip)
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------------------------- folder picker
+@Composable
+private fun PickerDialog(d: Dlg.Picker, close: () -> Unit) {
+    val c = Win.c
+    var cur by remember { mutableStateOf<String?>(d.start.takeIf { File(it).isDirectory }) }
+    val kids by produceState<List<String>>(emptyList(), cur) {
+        val p = cur
+        value = if (p == null) Volumes.list.map { it.root } else withContext(Dispatchers.IO) {
+            (File(p).listFiles { f -> f.isDirectory && !f.name.startsWith(".") } ?: emptyArray()).map { it.absolutePath }.sortedWith { a, b -> com.lumen.explorer.naturalCompare(Paths.name(a), Paths.name(b)) }
+        }
+    }
+    WinDialog(d.title, close, "Select this folder", { val p = cur; if (p != null) { close(); d.onPick(p) } }, cur != null) {
+        Txt(cur ?: "Choose a storage location", 12.sp, color = c.text2, maxLines = 2, modifier = Modifier.padding(bottom = 6.dp))
+        Column(Modifier.fillMaxWidth().heightIn(max = 340.dp).clip(RoundedCornerShape(8.dp)).border(1.dp, c.stroke, RoundedCornerShape(8.dp)).verticalScroll(rememberScrollState())) {
+            if (cur != null) Row(Modifier.fillMaxWidth().clickable {
+                val p = cur!!
+                cur = if (Volumes.list.any { it.root == p }) null else Paths.parent(p)
+            }.padding(horizontal = 12.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Filled.ArrowUpward, null, tint = c.text2, modifier = Modifier.size(20.dp)); Spacer(Modifier.width(12.dp)); Txt("Up", 14.sp)
+            }
+            kids.forEach { p ->
+                Row(Modifier.fillMaxWidth().clickable { cur = p }.padding(horizontal = 12.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                    FolderGlyph(26.dp); Spacer(Modifier.width(12.dp))
+                    Txt(Volumes.list.firstOrNull { it.root == p }?.label ?: Paths.name(p), 14.sp)
+                }
+            }
+            if (kids.isEmpty() && cur != null) Txt("No sub-folders", 13.sp, color = c.text2, modifier = Modifier.padding(14.dp))
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------------------------- archive contents
+@Composable
+private fun ArchiveListDialog(d: Dlg.ArchiveList, close: () -> Unit) {
+    val c = Win.c
+    val f = File(d.path)
+    val items by produceState<List<com.lumen.explorer.ZipCore.Item>?>(null, d.path) { value = withContext(Dispatchers.IO) { ArchiveExtras.list(f) } }
+    WinDialog(f.name, close, "Extract…", { close(); AppState.dialog = Dlg.Extract(d.path) }) {
+        val l = items
+        if (l == null) Row(Modifier.padding(vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+            CircularProgressIndicator(Modifier.size(20.dp), color = c.accent, strokeWidth = 2.dp); Spacer(Modifier.width(10.dp)); Txt("Reading archive…", 13.sp, color = c.text2)
+        } else {
+            Txt("${l.count { !it.isDir }} files  •  ${fmtSize(l.sumOf { it.size.coerceAtLeast(0) })} unpacked  •  ${fmtSize(f.length())} on disk", 12.sp, color = c.text2, maxLines = 2, modifier = Modifier.padding(bottom = 6.dp))
+            Column(Modifier.fillMaxWidth().heightIn(max = 300.dp).clip(RoundedCornerShape(8.dp)).border(1.dp, c.stroke, RoundedCornerShape(8.dp)).verticalScroll(rememberScrollState())) {
+                l.take(400).forEach { it ->
+                    Row(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                        FileGlyph(Mime.kindOf(Paths.name(it.name.trimEnd('/')), it.isDir), 26.dp); Spacer(Modifier.width(10.dp))
+                        Txt(it.name.trimEnd('/'), 13.sp, modifier = Modifier.weight(1f))
+                        if (!it.isDir) Txt(fmtSize(it.size), 11.sp, color = c.text2)
+                    }
+                }
+                if (l.size > 400) Txt("…and ${l.size - 400} more", 12.sp, color = c.text2, modifier = Modifier.padding(10.dp))
+            }
+            Spacer(Modifier.height(8.dp))
+            GhostButton("Open with another app", { close(); Ops.openExternal(d.path, chooser = true) }, Modifier.fillMaxWidth())
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------------------------- jobs
+@Composable
+private fun JobsDialog(close: () -> Unit) {
+    val c = Win.c
+    WinDialog("Background tasks", close, null, null, cancel = "Close") {
+        if (AppState.jobs.isEmpty()) Txt("Nothing running.", 14.sp, color = c.text2)
+        AppState.jobs.toList().forEach { j ->
+            val tick = j.tick
+            Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Txt(j.title, size = 14.sp, weight = FontWeight.SemiBold, maxLines = 2)
-                        Txt(
-                            when (j.state) { 1 -> "Done"; 2 -> "Failed"; 3 -> "Cancelled"; else -> j.note.ifEmpty { "Working…" } },
-                            size = 12.sp, color = Win.c.textDim,
-                        )
-                    }
-                    if (j.state == 0) IconBtn(Icons.Outlined.Close, "Cancel", { j.progress.cancel() })
+                    Txt(j.title, 14.sp, FontWeight.Medium, modifier = Modifier.weight(1f))
+                    if (j.state == JobState.RUNNING) IconBtn(Icons.Filled.Close, "Cancel", { j.progress.cancel() }, size = 32.dp, iconSize = 18.dp)
                 }
-                Spacer(Modifier.height(6.dp))
-                if (j.state == 0 && j.indeterminate) LinearProgressIndicator(Modifier.fillMaxWidth(), color = Win.c.accent, trackColor = Win.c.stroke)
-                else LinearProgressIndicator(progress = { j.frac }, modifier = Modifier.fillMaxWidth(), color = Win.c.accent, trackColor = Win.c.stroke)
+                if (j.state == JobState.RUNNING) {
+                    LinearProgressIndicator(progress = { if (tick >= 0) j.progress.fraction else 0f }, modifier = Modifier.fillMaxWidth(), color = c.accent)
+                    Txt(j.progress.label, 11.sp, color = c.text2)
+                } else Txt(j.message, 12.sp, color = if (j.state == JobState.ERROR) c.danger else c.text2)
             }
         }
-    }
-}
-
-// ------------------------------------------------------------------------------------------ checksum
-
-@Composable
-private fun HashDialog(d: Dialog.Hash, dismiss: () -> Unit) {
-    val p = remember { Progress() }
-    var frac by remember { mutableStateOf(0f) }
-    val result by produceState<List<String>?>(null, d.path) { value = withContext(Dispatchers.IO) { runCatching { hashAll(d.path, listOf("MD5", "SHA-1", "SHA-256"), p) }.getOrDefault(emptyList()) } }
-    LaunchedEffect(result) { while (result == null) { frac = p.fraction; delay(120) } }
-    val names = listOf("MD5", "SHA-1", "SHA-256")
-    WinDialog({ p.cancel(); dismiss() }, "Checksum", {
-        Txt(File(d.path).name, size = 13.sp, color = Win.c.textDim, maxLines = 2)
-        Spacer(Modifier.height(10.dp))
-        val r = result
-        if (r == null) LinearProgressIndicator(progress = { frac }, modifier = Modifier.fillMaxWidth(), color = Win.c.accent, trackColor = Win.c.stroke)
-        else if (r.isEmpty()) Txt("Couldn't read the file.", size = 14.sp, color = Win.c.danger)
-        else r.forEachIndexed { i, h ->
-            Column(Modifier.fillMaxWidth().padding(vertical = 4.dp).clickable { Ops.copyPathText(listOf(h)); AppState.toast("${names[i]} copied") }) {
-                Txt(names[i], size = 12.sp, color = Win.c.accent, weight = FontWeight.SemiBold)
-                Txt(h, size = 12.sp, maxLines = 3, overflow = androidx.compose.ui.text.style.TextOverflow.Clip)
-            }
-        }
-        Txt("Tap a value to copy it.", Modifier.padding(top = 6.dp), 11.sp, Win.c.textDim)
-    }) { PrimaryButton("Close", { p.cancel(); dismiss() }) }
-}
-
-// ------------------------------------------------------------------------------------------ properties
-
-private fun mediaInfo(e: FileEntry): List<Pair<String, String>> {
-    val out = ArrayList<Pair<String, String>>()
-    try {
-        when (e.kind) {
-            Kind.IMAGE -> {
-                val o = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
-                android.graphics.BitmapFactory.decodeFile(e.path, o)
-                try {
-                    val x = androidx.exifinterface.media.ExifInterface(e.path)
-                    val w = x.getAttributeInt(androidx.exifinterface.media.ExifInterface.TAG_IMAGE_WIDTH, 0).takeIf { it > 0 } ?: o.outWidth
-                    val h = x.getAttributeInt(androidx.exifinterface.media.ExifInterface.TAG_IMAGE_LENGTH, 0).takeIf { it > 0 } ?: o.outHeight
-                    if (w > 0) out.add("Dimensions" to "$w × $h")
-                    val make = x.getAttribute(androidx.exifinterface.media.ExifInterface.TAG_MAKE)
-                    val model = x.getAttribute(androidx.exifinterface.media.ExifInterface.TAG_MODEL)
-                    if (make != null || model != null) out.add("Camera" to listOfNotNull(make, model).joinToString(" "))
-                    x.getAttribute(androidx.exifinterface.media.ExifInterface.TAG_DATETIME_ORIGINAL)?.let { out.add("Date taken" to it) }
-                    x.getAttribute(androidx.exifinterface.media.ExifInterface.TAG_EXPOSURE_TIME)?.let { out.add("Exposure" to "$it s") }
-                    x.getAttribute(androidx.exifinterface.media.ExifInterface.TAG_F_NUMBER)?.let { out.add("Aperture" to "f/$it") }
-                    x.getAttribute(androidx.exifinterface.media.ExifInterface.TAG_PHOTOGRAPHIC_SENSITIVITY)?.let { out.add("ISO" to it) }
-                    x.getAttribute(androidx.exifinterface.media.ExifInterface.TAG_FOCAL_LENGTH)?.let { f ->
-                        val parts = f.split('/'); val v = if (parts.size == 2) parts[0].toDoubleOrNull()?.div(parts[1].toDoubleOrNull() ?: 1.0) else f.toDoubleOrNull()
-                        if (v != null) out.add("Focal length" to String.format(java.util.Locale.US, "%.1f mm", v))
-                    }
-                    x.latLong?.let { out.add("Location" to String.format(java.util.Locale.US, "%.5f, %.5f", it[0], it[1])) }
-                } catch (_: Throwable) { if (o.outWidth > 0) out.add("Dimensions" to "${o.outWidth} × ${o.outHeight}") }
-            }
-            Kind.VIDEO, Kind.AUDIO -> {
-                val r = android.media.MediaMetadataRetriever()
-                try {
-                    r.setDataSource(e.path)
-                    fun m(k: Int) = r.extractMetadata(k)
-                    m(android.media.MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull()?.let { out.add("Duration" to fmtDuration(it)) }
-                    val w = m(android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH); val h = m(android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)
-                    if (w != null && h != null) out.add("Resolution" to "$w × $h")
-                    m(android.media.MediaMetadataRetriever.METADATA_KEY_CAPTURE_FRAMERATE)?.toFloatOrNull()?.let { out.add("Frame rate" to String.format(java.util.Locale.US, "%.1f fps", it)) }
-                    m(android.media.MediaMetadataRetriever.METADATA_KEY_BITRATE)?.toLongOrNull()?.let { out.add("Bit rate" to "${it / 1000} kbps") }
-                    m(android.media.MediaMetadataRetriever.METADATA_KEY_TITLE)?.let { out.add("Title" to it) }
-                    m(android.media.MediaMetadataRetriever.METADATA_KEY_ARTIST)?.let { out.add("Artist" to it) }
-                    m(android.media.MediaMetadataRetriever.METADATA_KEY_ALBUM)?.let { out.add("Album" to it) }
-                    m(android.media.MediaMetadataRetriever.METADATA_KEY_MIMETYPE)?.let { out.add("Format" to it) }
-                } finally { runCatching { r.release() } }
-            }
-            Kind.APK -> {
-                val pm = AppState.app.packageManager
-                val info = pm.getPackageArchiveInfo(e.path, 0)
-                val ai = info?.applicationInfo
-                if (info != null && ai != null) {
-                    ai.sourceDir = e.path; ai.publicSourceDir = e.path
-                    out.add("App name" to ai.loadLabel(pm).toString())
-                    out.add("Package" to info.packageName)
-                    out.add("Version" to "${info.versionName ?: "?"}")
-                }
-            }
-            else -> {}
-        }
-    } catch (_: Throwable) {}
-    return out
-}
-
-@Composable
-private fun PropRow(label: String, value: String) {
-    Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 5.dp)) {
-        Txt(label, Modifier.width(110.dp), 13.sp, Win.c.textDim)
-        Txt(value, Modifier.weight(1f), 13.sp, maxLines = 4)
-    }
-}
-
-@Composable
-private fun PropertiesContent(entries: List<FileEntry>, dismiss: () -> Unit) {
-    if (entries.size == 1) {
-        val e = entries[0]
-        val tally by produceState<FileOps.Tally?>(null, e.path) { value = if (e.isDir) withContext(Dispatchers.IO) { FileOps.tally(listOf(e.path)) } else null }
-        val media by produceState<List<Pair<String, String>>>(emptyList(), e.path) { value = withContext(Dispatchers.IO) { mediaInfo(e) } }
-        val created by produceState<String?>(null, e.path) {
-            value = withContext(Dispatchers.IO) { runCatching { fmtDate(java.nio.file.Files.readAttributes(File(e.path).toPath(), java.nio.file.attribute.BasicFileAttributes::class.java).creationTime().toMillis()) }.getOrNull() }
-        }
-        Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Thumb(e, 72.dp, cornerRadius = 8.dp); Spacer(Modifier.width(16.dp))
-            Column(Modifier.weight(1f)) {
-                Txt(e.name, size = 17.sp, weight = FontWeight.SemiBold, maxLines = 3)
-                Txt(e.typeLabel, size = 13.sp, color = Win.c.textDim)
-            }
-        }
-        HDivider(Modifier.padding(vertical = 6.dp))
-        PropRow("Location", e.parent)
-        if (e.isDir) {
-            val t = tally
-            PropRow("Size", if (t == null) "Calculating…" else "${fmtSize(t.bytes)} (${"%,d".format(t.bytes)} bytes)")
-            PropRow("Contains", if (t == null) "…" else "${t.files} files, ${t.folders} folders")
-        } else PropRow("Size", "${fmtSize(e.size)} (${"%,d".format(e.size)} bytes)")
-        PropRow("Modified", fmtDate(e.modified))
-        created?.let { PropRow("Created", it) }
-        PropRow("Attributes", listOfNotNull(if (File(e.path).canRead()) "Readable" else null, if (File(e.path).canWrite()) "Writable" else "Read-only", if (e.hidden) "Hidden" else null).joinToString(", "))
-        if (media.isNotEmpty()) { HDivider(Modifier.padding(vertical = 6.dp)); media.forEach { (k, v) -> PropRow(k, v) } }
-        Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            if (!e.isDir) GhostButton("Checksum", { dismiss(); AppState.dialog = Dialog.Hash(e.path) })
-            GhostButton("Copy path", { Ops.copyPathText(listOf(e.path)) })
-        }
-    } else {
-        val t by produceState<FileOps.Tally?>(null, entries) { value = withContext(Dispatchers.IO) { FileOps.tally(entries.map { it.path }) } }
-        Txt("${entries.size} items", Modifier.padding(horizontal = 20.dp, vertical = 8.dp), 18.sp, weight = FontWeight.SemiBold)
-        HDivider(Modifier.padding(vertical = 6.dp))
-        PropRow("Contains", "${entries.count { !it.isDir }} files, ${entries.count { it.isDir }} folders")
-        PropRow("Total size", t?.let { fmtSize(it.bytes) } ?: "Calculating…")
-        PropRow("Location", entries.map { it.parent }.distinct().let { if (it.size == 1) it[0] else "Multiple locations" })
     }
 }

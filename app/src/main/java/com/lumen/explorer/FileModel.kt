@@ -1,204 +1,199 @@
 package com.lumen.explorer
 
-import java.io.File
+import java.text.SimpleDateFormat
 import java.util.Calendar
+import java.util.Date
 import java.util.Locale
 
-/** What a file "is" – drives icons, previews, and category filters. */
-enum class Kind { FOLDER, IMAGE, VIDEO, AUDIO, DOC, TEXT, ARCHIVE, APK, OTHER }
+enum class Kind(val label: String) {
+    FOLDER("Folder"), IMAGE("Image"), VIDEO("Video"), AUDIO("Audio"), DOCUMENT("Document"), SHEET("Spreadsheet"),
+    SLIDES("Presentation"), PDF("PDF"), TEXT("Text"), CODE("Code"), ARCHIVE("Archive"), APK("Android app"),
+    FONT("Font"), DISK("Disk image"), EBOOK("E-book"), OTHER("File")
+}
 
-/** A lightweight snapshot of one file or folder (cheap to sort/group/render). */
 data class FileEntry(
     val path: String,
     val name: String,
     val isDir: Boolean,
     val size: Long,
     val modified: Long,
-    val hidden: Boolean = name.startsWith("."),
-    val canRead: Boolean = true,
+    val kind: Kind,
+    val ext: String,
+    val hidden: Boolean,
+    /** direct children for folders (-1 = not counted yet) */
+    val children: Int = -1,
 ) {
-    val ext: String get() = if (isDir) "" else Mime.extOf(name)
-    val kind: Kind get() = if (isDir) Kind.FOLDER else Mime.kindOf(name)
-    val typeLabel: String get() = Mime.typeLabel(name, isDir)
-    val parent: String get() = path.substringBeforeLast('/', "/").ifEmpty { "/" }
+    val parent: String get() = Paths.parent(path)
+}
 
-    companion object {
-        fun of(f: File) = FileEntry(
-            path = f.absolutePath, name = f.name.ifEmpty { f.absolutePath },
-            isDir = f.isDirectory, size = if (f.isDirectory) 0L else f.length(),
-            modified = f.lastModified(), hidden = f.name.startsWith("."), canRead = f.canRead()
-        )
+enum class SortBy(val label: String) { NAME("Name"), MODIFIED("Date modified"), SIZE("Size"), TYPE("Type") }
+enum class GroupBy(val label: String) { NONE("None"), NAME("Name"), DATE("Date modified"), SIZE("Size"), TYPE("Type") }
+enum class ViewMode(val label: String) {
+    XL("Extra large icons"), LARGE("Large icons"), MEDIUM("Medium icons"), SMALL("Small icons"),
+    LIST("List"), DETAILS("Details"), TILES("Tiles"), CONTENT("Content")
+}
+
+object Paths {
+    fun parent(p: String): String {
+        val t = p.trimEnd('/')
+        val i = t.lastIndexOf('/')
+        return if (i <= 0) "/" else t.substring(0, i)
+    }
+    fun name(p: String): String {
+        val t = p.trimEnd('/')
+        return t.substring(t.lastIndexOf('/') + 1)
+    }
+    fun join(dir: String, name: String): String = if (dir.endsWith("/")) dir + name else "$dir/$name"
+    fun ext(name: String): String {
+        val i = name.lastIndexOf('.')
+        return if (i <= 0 || i == name.length - 1) "" else name.substring(i + 1).lowercase(Locale.ROOT)
+    }
+    fun isUnder(path: String, root: String): Boolean {
+        val r = root.trimEnd('/')
+        return path == r || path.startsWith("$r/")
+    }
+    /** Breadcrumb segments as (label, fullPath) below the given root. */
+    fun crumbs(path: String, root: String, rootLabel: String): List<Pair<String, String>> {
+        val out = ArrayList<Pair<String, String>>()
+        val r = root.trimEnd('/')
+        out += rootLabel to (if (r.isEmpty()) "/" else r)
+        if (path.length > r.length && path.startsWith(r)) {
+            var cur = r
+            for (seg in path.substring(r.length).split('/').filter { it.isNotEmpty() }) {
+                cur = "$cur/$seg"
+                out += seg to cur
+            }
+        }
+        return out
     }
 }
 
-enum class SortBy { NAME, DATE, SIZE, TYPE }
-enum class GroupBy { NONE, NAME, DATE, SIZE, TYPE }
-enum class ViewMode { XL, LARGE, MEDIUM, SMALL, LIST, DETAILS, TILES, CONTENT }
-
-/** Natural ("file2" < "file10") case-insensitive compare, like Windows Explorer. */
+/** Windows-style natural ordering: "img2" < "img10", case-insensitive. */
 fun naturalCompare(a: String, b: String): Int {
-    var i = 0; var j = 0
+    var i = 0
+    var j = 0
     while (i < a.length && j < b.length) {
-        val ca = a[i]; val cb = b[j]
+        val ca = a[i]
+        val cb = b[j]
         if (ca.isDigit() && cb.isDigit()) {
-            var si = i; while (si < a.length && a[si] == '0') si++
-            var sj = j; while (sj < b.length && b[sj] == '0') sj++
-            var ei = si; while (ei < a.length && a[ei].isDigit()) ei++
-            var ej = sj; while (ej < b.length && b[ej].isDigit()) ej++
-            val la = ei - si; val lb = ej - sj
+            var si = i
+            while (si < a.length && a[si] == '0') si++
+            var sj = j
+            while (sj < b.length && b[sj] == '0') sj++
+            var ei = si
+            while (ei < a.length && a[ei].isDigit()) ei++
+            var ej = sj
+            while (ej < b.length && b[ej].isDigit()) ej++
+            val la = ei - si
+            val lb = ej - sj
             if (la != lb) return la.compareTo(lb)
-            for (k in 0 until la) {
-                val d = a[si + k].compareTo(b[sj + k])
-                if (d != 0) return d
-            }
-            i = ei; j = ej
+            val c = a.substring(si, ei).compareTo(b.substring(sj, ej))
+            if (c != 0) return c
+            i = ei
+            j = ej
         } else {
-            val d = ca.lowercaseChar().compareTo(cb.lowercaseChar())
-            if (d != 0) return d
-            i++; j++
+            val c = ca.lowercaseChar().compareTo(cb.lowercaseChar())
+            if (c != 0) return c
+            i++
+            j++
         }
     }
     return (a.length - i).compareTo(b.length - j)
 }
 
 fun sortEntries(list: List<FileEntry>, by: SortBy, asc: Boolean, foldersFirst: Boolean = true): List<FileEntry> {
-    val base: Comparator<FileEntry> = when (by) {
+    val cmp: Comparator<FileEntry> = when (by) {
         SortBy.NAME -> Comparator { x, y -> naturalCompare(x.name, y.name) }
-        SortBy.DATE -> Comparator { x, y -> x.modified.compareTo(y.modified) }
+        SortBy.MODIFIED -> Comparator { x, y -> x.modified.compareTo(y.modified) }
         SortBy.SIZE -> Comparator { x, y -> x.size.compareTo(y.size) }
         SortBy.TYPE -> Comparator { x, y ->
-            val c = x.typeLabel.compareTo(y.typeLabel, ignoreCase = true)
+            val c = x.kind.label.compareTo(y.kind.label)
+            if (c != 0) c else {
+                val e = x.ext.compareTo(y.ext)
+                if (e != 0) e else naturalCompare(x.name, y.name)
+            }
+        }
+    }
+    val dir = if (asc) cmp else cmp.reversed()
+    val full = Comparator<FileEntry> { x, y ->
+        if (foldersFirst && x.isDir != y.isDir) { if (x.isDir) -1 else 1 } else {
+            val c = dir.compare(x, y)
             if (c != 0) c else naturalCompare(x.name, y.name)
         }
     }
-    val dir = if (asc) base else base.reversed()
-    val full = if (foldersFirst) Comparator<FileEntry> { x, y ->
-        if (x.isDir != y.isDir) (if (x.isDir) -1 else 1) else dir.compare(x, y)
-    } else dir
     return list.sortedWith(full)
 }
 
-/** A titled run of entries ("Today", "Large (1–16 MB)", "A", ...). */
-data class Group(val title: String, val items: List<FileEntry>)
-
-fun sizeBucket(size: Long): Pair<Int, String> = when {
-    size <= 0L -> 0 to "Empty"
-    size <= 16L * 1024 -> 1 to "Tiny (0 – 16 KB)"
-    size <= 1024L * 1024 -> 2 to "Small (16 KB – 1 MB)"
-    size <= 128L * 1024 * 1024 -> 3 to "Medium (1 – 128 MB)"
-    size <= 1024L * 1024 * 1024 -> 4 to "Large (128 MB – 1 GB)"
-    size <= 4L * 1024 * 1024 * 1024 -> 5 to "Huge (1 – 4 GB)"
-    else -> 6 to "Gigantic (> 4 GB)"
-}
-
-fun dateBucket(modified: Long, now: Long): Pair<Int, String> {
-    val cal = Calendar.getInstance().apply { timeInMillis = now }
-    fun startOfDay(c: Calendar): Calendar { c.set(Calendar.HOUR_OF_DAY, 0); c.set(Calendar.MINUTE, 0); c.set(Calendar.SECOND, 0); c.set(Calendar.MILLISECOND, 0); return c }
-    val today = startOfDay(cal.clone() as Calendar)
-    val yesterday = (today.clone() as Calendar).apply { add(Calendar.DAY_OF_YEAR, -1) }
-    val weekStart = (today.clone() as Calendar).apply { set(Calendar.DAY_OF_WEEK, firstDayOfWeek); if (timeInMillis > today.timeInMillis) add(Calendar.DAY_OF_YEAR, -7) }
-    val lastWeekStart = (weekStart.clone() as Calendar).apply { add(Calendar.DAY_OF_YEAR, -7) }
-    val monthStart = (today.clone() as Calendar).apply { set(Calendar.DAY_OF_MONTH, 1) }
-    val lastMonthStart = (monthStart.clone() as Calendar).apply { add(Calendar.MONTH, -1) }
-    val yearStart = (today.clone() as Calendar).apply { set(Calendar.DAY_OF_YEAR, 1) }
-    val t = modified
+fun dateBucket(ms: Long, now: Long = System.currentTimeMillis()): String {
+    if (ms <= 0) return "Unknown"
+    val c = Calendar.getInstance().apply { timeInMillis = now }
+    fun startOfDay(t: Long) = Calendar.getInstance().apply {
+        timeInMillis = t; set(Calendar.HOUR_OF_DAY, 0); set(Calendar.MINUTE, 0); set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
+    }.timeInMillis
+    val today = startOfDay(c.timeInMillis)
+    val day = 86_400_000L
     return when {
-        t >= today.timeInMillis -> 0 to "Today"
-        t >= yesterday.timeInMillis -> 1 to "Yesterday"
-        t >= weekStart.timeInMillis -> 2 to "Earlier this week"
-        t >= lastWeekStart.timeInMillis -> 3 to "Last week"
-        t >= monthStart.timeInMillis -> 4 to "Earlier this month"
-        t >= lastMonthStart.timeInMillis -> 5 to "Last month"
-        t >= yearStart.timeInMillis -> 6 to "Earlier this year"
-        else -> 7 to "A long time ago"
+        ms >= today -> "Today"
+        ms >= today - day -> "Yesterday"
+        ms >= today - 6 * day -> "Earlier this week"
+        ms >= today - 13 * day -> "Last week"
+        ms >= today - 29 * day -> "Earlier this month"
+        ms >= today - 59 * day -> "Last month"
+        ms >= today - 364 * day -> "Earlier this year"
+        else -> "A long time ago"
     }
 }
 
-/** Windows-style grouping. Input order inside each group is preserved. */
-fun groupEntries(list: List<FileEntry>, by: GroupBy, asc: Boolean, now: Long = System.currentTimeMillis()): List<Group> {
-    if (by == GroupBy.NONE) return listOf(Group("", list))
-    data class Key(val order: Int, val title: String)
-    val keyed = list.map { e ->
-        val k = when (by) {
-            GroupBy.NAME -> {
-                val c = e.name.firstOrNull()?.uppercaseChar()
-                if (c != null && c.isLetter()) Key(1, c.toString()) else if (c != null && c.isDigit()) Key(0, "0 – 9") else Key(2, "Other")
-            }
-            GroupBy.DATE -> dateBucket(e.modified, now).let { Key(it.first, it.second) }
-            GroupBy.SIZE -> if (e.isDir) Key(-1, "Folders") else sizeBucket(e.size).let { Key(it.first, it.second) }
-            GroupBy.TYPE -> Key(0, e.typeLabel)
-            GroupBy.NONE -> Key(0, "")
-        }
-        k to e
-    }
-    val map = LinkedHashMap<Key, MutableList<FileEntry>>()
-    for ((k, e) in keyed) map.getOrPut(k) { ArrayList() }.add(e)
-    val keys = map.keys.toMutableList()
-    keys.sortWith(Comparator { a, b ->
-        if (by == GroupBy.TYPE) a.title.compareTo(b.title, ignoreCase = true)
-        else if (by == GroupBy.NAME) { val c = a.order.compareTo(b.order); if (c != 0) c else a.title.compareTo(b.title) }
-        else a.order.compareTo(b.order)
-    })
-    // Date groups: newest first when ascending == false, otherwise oldest... Explorer shows Today first by default (descending).
-    if (by == GroupBy.DATE && asc) keys.reverse()
-    if (by == GroupBy.SIZE && !asc) keys.reverse()
-    if ((by == GroupBy.NAME || by == GroupBy.TYPE) && !asc) keys.reverse()
-    return keys.map { Group(it.title, map[it]!!) }
+fun sizeBucket(size: Long): String = when {
+    size <= 0 -> "Empty"
+    size < 16 * 1024 -> "Tiny (0 – 16 KB)"
+    size < 1024 * 1024 -> "Small (16 KB – 1 MB)"
+    size < 128L * 1024 * 1024 -> "Medium (1 – 128 MB)"
+    size < 1024L * 1024 * 1024 -> "Large (128 MB – 1 GB)"
+    else -> "Huge (> 1 GB)"
 }
 
-fun fmtSize(b: Long): String {
-    if (b < 1024) return "$b B"
+fun groupLabel(e: FileEntry, g: GroupBy): String = when (g) {
+    GroupBy.NONE -> ""
+    GroupBy.NAME -> if (e.isDir) "Folders" else e.name.firstOrNull()?.let { if (it.isLetter()) it.uppercaseChar().toString() else "#" } ?: "#"
+    GroupBy.DATE -> dateBucket(e.modified)
+    GroupBy.SIZE -> if (e.isDir) "Folders" else sizeBucket(e.size)
+    GroupBy.TYPE -> e.kind.label
+}
+
+/** Groups keep the incoming (already sorted) order inside each group; groups are ordered by first appearance. */
+fun groupEntries(list: List<FileEntry>, g: GroupBy): List<Pair<String, List<FileEntry>>> {
+    if (g == GroupBy.NONE) return listOf("" to list)
+    val m = LinkedHashMap<String, MutableList<FileEntry>>()
+    for (e in list) m.getOrPut(groupLabel(e, g)) { ArrayList() }.add(e)
+    return m.map { it.key to it.value }
+}
+
+fun fmtSize(bytes: Long): String {
+    if (bytes < 0) return "—"
+    if (bytes < 1024) return "$bytes B"
     val units = arrayOf("KB", "MB", "GB", "TB")
-    var v = b.toDouble(); var i = -1
-    while (v >= 1024 && i < units.lastIndex) { v /= 1024; i++ }
-    return if (v >= 100) String.format(Locale.US, "%.0f %s", v, units[i]) else String.format(Locale.US, "%.1f %s", v, units[i])
+    var v = bytes.toDouble()
+    var u = -1
+    while (v >= 1024 && u < units.size - 1) { v /= 1024; u++ }
+    return if (v >= 100) String.format(Locale.US, "%.0f %s", v, units[u]) else String.format(Locale.US, "%.1f %s", v, units[u])
 }
 
-fun fmtSizeKb(b: Long): String = String.format(Locale.US, "%,d KB", (b + 1023) / 1024)
+fun fmtDate(ms: Long): String =
+    if (ms <= 0) "—" else SimpleDateFormat("dd MMM yyyy, HH:mm", Locale.getDefault()).format(Date(ms))
+
+fun fmtDay(ms: Long): String =
+    if (ms <= 0) "—" else SimpleDateFormat("dd MMM yyyy", Locale.getDefault()).format(Date(ms))
+
+fun fmtMonth(ms: Long): String =
+    if (ms <= 0) "Unknown" else SimpleDateFormat("MMMM yyyy", Locale.getDefault()).format(Date(ms))
 
 fun fmtDuration(ms: Long): String {
     val s = ms / 1000
-    val h = s / 3600; val m = (s % 3600) / 60; val sec = s % 60
+    val h = s / 3600
+    val m = (s % 3600) / 60
+    val sec = s % 60
     return if (h > 0) String.format(Locale.US, "%d:%02d:%02d", h, m, sec) else String.format(Locale.US, "%d:%02d", m, sec)
 }
 
-fun fmtDate(ms: Long): String {
-    if (ms <= 0) return ""
-    val c = Calendar.getInstance().apply { timeInMillis = ms }
-    var h = c.get(Calendar.HOUR); if (h == 0) h = 12
-    return String.format(
-        Locale.US, "%02d/%02d/%04d %d:%02d %s",
-        c.get(Calendar.DAY_OF_MONTH), c.get(Calendar.MONTH) + 1, c.get(Calendar.YEAR),
-        h, c.get(Calendar.MINUTE), if (c.get(Calendar.AM_PM) == Calendar.AM) "AM" else "PM"
-    )
-}
-
-/** Path helpers that work on plain strings (no android). */
-object Paths {
-    fun name(path: String) = path.trimEnd('/').substringAfterLast('/').ifEmpty { "/" }
-    fun parent(path: String): String? {
-        val p = path.trimEnd('/')
-        if (p.isEmpty()) return null
-        return p.substringBeforeLast('/', "").ifEmpty { "/" }
-    }
-    fun join(dir: String, name: String) = if (dir.endsWith("/")) dir + name else "$dir/$name"
-    /** Breadcrumb segments from [root] downward: list of (label, fullPath). */
-    fun crumbs(path: String, root: String, rootLabel: String): List<Pair<String, String>> {
-        val out = ArrayList<Pair<String, String>>()
-        val r = root.trimEnd('/')
-        if (path == r || path.startsWith("$r/")) {
-            out.add(rootLabel to root)
-            var cur = r
-            path.removePrefix(r).split('/').filter { it.isNotEmpty() }.forEach { seg -> cur = "$cur/$seg"; out.add(seg to cur) }
-        } else {
-            var cur = ""
-            out.add("/" to "/")
-            path.split('/').filter { it.isNotEmpty() }.forEach { seg -> cur = "$cur/$seg"; out.add(seg to cur) }
-        }
-        return out
-    }
-    fun isInside(child: String, parent: String): Boolean {
-        val p = parent.trimEnd('/')
-        return child == p || child.startsWith("$p/")
-    }
-}
+fun itemsLabel(n: Int): String = if (n < 0) "" else if (n == 1) "1 item" else "$n items"

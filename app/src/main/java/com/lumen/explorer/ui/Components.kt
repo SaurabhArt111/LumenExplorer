@@ -1,5 +1,8 @@
+@file:OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
+
 package com.lumen.explorer.ui
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -9,285 +12,397 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Check
-import androidx.compose.material.icons.outlined.PlayArrow
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.MenuDefaults
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.lumen.explorer.FileEntry
-import com.lumen.explorer.Kind
 import com.lumen.explorer.Settings
 import com.lumen.explorer.Thumbs
-import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 
+// ---------------------------------------------------------------------------------------------- text & basic widgets
 @Composable
 fun Txt(
-    text: String, modifier: Modifier = Modifier, size: TextUnit = 14.sp, color: Color = Win.c.text,
-    weight: FontWeight? = null, maxLines: Int = 1, align: TextAlign? = null, overflow: TextOverflow = TextOverflow.Ellipsis,
+    text: String,
+    size: TextUnit = 14.sp,
+    weight: FontWeight = FontWeight.Normal,
+    color: Color = Win.c.text,
+    modifier: Modifier = Modifier,
+    maxLines: Int = 1,
+    align: TextAlign? = null,
+    overflow: TextOverflow = TextOverflow.Ellipsis,
+    mono: Boolean = false,
 ) {
-    Text(text, modifier, color = color, fontSize = size, fontWeight = weight, maxLines = maxLines, overflow = overflow, textAlign = align)
+    Text(
+        text, modifier = modifier, color = color, fontSize = size, fontWeight = weight, maxLines = maxLines, overflow = overflow,
+        textAlign = align, lineHeight = size * 1.3f, fontFamily = if (mono) FontFamily.Monospace else null,
+    )
 }
 
 @Composable
 fun IconBtn(
-    icon: ImageVector, desc: String, onClick: () -> Unit, modifier: Modifier = Modifier,
-    enabled: Boolean = true, tint: Color = Win.c.text, size: Dp = 36.dp, iconSize: Dp = 20.dp, bg: Color = Color.Transparent,
+    icon: ImageVector,
+    desc: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    tint: Color = Win.c.text,
+    size: Dp = 40.dp,
+    iconSize: Dp = 22.dp,
 ) {
     Box(
-        modifier.size(size).clip(RoundedCornerShape(6.dp)).background(bg)
-            .clickable(enabled = enabled, role = Role.Button, onClick = onClick),
-        contentAlignment = Alignment.Center,
+        modifier.size(size).clip(CircleShape).clickable(enabled = enabled, role = Role.Button, onClick = onClick),
+        contentAlignment = Alignment.Center
     ) { Icon(icon, desc, tint = if (enabled) tint else tint.copy(alpha = 0.35f), modifier = Modifier.size(iconSize)) }
 }
 
 @Composable
-fun VDivider(modifier: Modifier = Modifier, height: Dp = 20.dp) {
-    Box(modifier.width(1.dp).height(height).background(Win.c.stroke))
-}
+fun HDivider(modifier: Modifier = Modifier) { Box(modifier.fillMaxWidth().height(1.dp).background(Win.c.stroke)) }
 
 @Composable
-fun HDivider(modifier: Modifier = Modifier) {
-    HorizontalDivider(modifier, thickness = 1.dp, color = Win.c.stroke)
-}
-
-/** Thumbnail with automatic fallback to a folder / file glyph. */
-@Composable
-fun Thumb(e: FileEntry, size: Dp, modifier: Modifier = Modifier, thumbs: Boolean = true, cornerRadius: Dp = 4.dp) {
-    if (e.isDir) { FolderGlyph(size, modifier); return }
-    val ctx = LocalContext.current
-    val px = with(LocalDensity.current) { size.roundToPx() }.coerceIn(48, 640)
-    val useThumb = thumbs && Settings.thumbnails && Thumbs.canThumb(e.kind) && size >= 36.dp && (e.kind != Kind.DOC || e.ext == "pdf")
-    val key = Thumbs.key(e, px)
-    var bmp by remember(key) { mutableStateOf(if (useThumb) Thumbs.cached(key) else null) }
-    if (useThumb && bmp == null) LaunchedEffect(key) { bmp = Thumbs.load(ctx, e, px) }
-    val b = bmp
-    if (b != null) {
-        val crop = e.kind == Kind.IMAGE || e.kind == Kind.VIDEO || e.kind == Kind.DOC
-        Box(modifier.size(size).clip(RoundedCornerShape(cornerRadius)), contentAlignment = Alignment.Center) {
-            Image(b.asImageBitmap(), null, Modifier.fillMaxSize(), contentScale = if (crop) ContentScale.Crop else ContentScale.Fit)
-            if (e.kind == Kind.VIDEO && size >= 56.dp) {
-                Box(Modifier.size(size * 0.36f).clip(CircleShape).background(Color(0x99000000)), contentAlignment = Alignment.Center) {
-                    Icon(Icons.Outlined.PlayArrow, null, tint = Color.White, modifier = Modifier.size(size * 0.24f))
-                }
-            }
-        }
-    } else FileGlyph(e.kind, e.ext, size, modifier)
-}
-
-// ---------------------------------------------------------------------------------------- menus
-
-sealed class MenuEntry {
-    class Item(
-        val label: String, val icon: ImageVector? = null, val checked: Boolean = false, val enabled: Boolean = true,
-        val danger: Boolean = false, val onClick: () -> Unit,
-    ) : MenuEntry()
-    class Header(val text: String) : MenuEntry()
-    object Divider : MenuEntry()
-}
-
-/**
- * A popup menu that is a classic drop-down on wide screens and a native-style bottom sheet on phones.
- * [content] receives a lambda that opens the menu.
- */
-@Composable
-fun MenuAnchor(title: String, entries: () -> List<MenuEntry>, content: @Composable (open: () -> Unit) -> Unit) {
-    var open by remember { mutableStateOf(false) }
-    val wide = LocalWide.current
-    Box {
-        content { open = true }
-        if (open) {
-            val list = entries()
-            if (wide) {
-                DropdownMenu(expanded = true, onDismissRequest = { open = false }, modifier = Modifier.background(Win.c.card)) {
-                    for (en in list) when (en) {
-                        is MenuEntry.Header -> Txt(en.text, Modifier.padding(horizontal = 14.dp, vertical = 6.dp), 12.sp, Win.c.textDim, FontWeight.SemiBold)
-                        MenuEntry.Divider -> HDivider(Modifier.padding(vertical = 4.dp))
-                        is MenuEntry.Item -> DropdownMenuItem(
-                            text = { Txt(en.label, color = if (en.danger) Win.c.danger else Win.c.text) },
-                            leadingIcon = {
-                                if (en.checked) Icon(Icons.Outlined.Check, null, tint = Win.c.accent, modifier = Modifier.size(18.dp))
-                                else if (en.icon != null) Icon(en.icon, null, tint = if (en.danger) Win.c.danger else Win.c.textDim, modifier = Modifier.size(18.dp))
-                                else Spacer(Modifier.size(18.dp))
-                            },
-                            enabled = en.enabled,
-                            onClick = { open = false; en.onClick() },
-                            colors = MenuDefaults.itemColors(),
-                        )
-                    }
-                }
-            } else ActionSheet(title, list) { open = false }
-        }
-    }
-}
-
-/** Bottom sheet listing menu entries (also used for context actions). */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun ActionSheet(title: String?, entries: List<MenuEntry>, header: (@Composable () -> Unit)? = null, quick: List<MenuEntry.Item> = emptyList(), onDismiss: () -> Unit) {
-    val state = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    val scope = rememberCoroutineScope()
-    fun run(block: () -> Unit) { scope.launch { state.hide() }.invokeOnCompletion { onDismiss(); block() } }
-    ModalBottomSheet(
-        onDismissRequest = onDismiss, sheetState = state, containerColor = Win.c.card, contentColor = Win.c.text,
-        shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp),
-    ) {
-        Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).navigationBarsPadding().padding(bottom = 12.dp)) {
-            if (header != null) header()
-            else if (title != null) Txt(title, Modifier.padding(horizontal = 20.dp, vertical = 6.dp), 16.sp, weight = FontWeight.SemiBold)
-            if (quick.isNotEmpty()) {
-                Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp), horizontalArrangement = Arrangement.SpaceAround) {
-                    for (q in quick) {
-                        Column(
-                            Modifier.clip(RoundedCornerShape(8.dp)).clickable(enabled = q.enabled) { run(q.onClick) }.padding(horizontal = 12.dp, vertical = 8.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                        ) {
-                            val tint = if (!q.enabled) Win.c.textDim.copy(alpha = 0.4f) else if (q.danger) Win.c.danger else Win.c.text
-                            q.icon?.let { Icon(it, q.label, tint = tint, modifier = Modifier.size(24.dp)) }
-                            Txt(q.label, size = 11.sp, color = tint)
-                        }
-                    }
-                }
-                HDivider(Modifier.padding(vertical = 4.dp))
-            }
-            for (en in entries) when (en) {
-                is MenuEntry.Header -> Txt(en.text, Modifier.padding(start = 20.dp, top = 10.dp, bottom = 2.dp), 12.sp, Win.c.textDim, FontWeight.SemiBold)
-                MenuEntry.Divider -> HDivider(Modifier.padding(vertical = 4.dp))
-                is MenuEntry.Item -> Row(
-                    Modifier.fillMaxWidth().clickable(enabled = en.enabled) { run(en.onClick) }.padding(horizontal = 20.dp, vertical = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    val tint = if (!en.enabled) Win.c.textDim.copy(alpha = 0.4f) else if (en.danger) Win.c.danger else Win.c.text
-                    Box(Modifier.size(24.dp), contentAlignment = Alignment.Center) {
-                        if (en.checked) Icon(Icons.Outlined.Check, null, tint = Win.c.accent, modifier = Modifier.size(20.dp))
-                        else if (en.icon != null) Icon(en.icon, null, tint = if (en.danger || !en.enabled) tint else Win.c.textDim, modifier = Modifier.size(20.dp))
-                    }
-                    Spacer(Modifier.width(16.dp))
-                    Txt(en.label, size = 15.sp, color = tint)
-                }
-            }
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------------------- form rows
-
-@Composable
-fun SwitchRow(label: String, checked: Boolean, onChange: (Boolean) -> Unit, modifier: Modifier = Modifier, sub: String? = null) {
-    Row(modifier.fillMaxWidth().clickable { onChange(!checked) }.padding(horizontal = 16.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-        Column(Modifier.weight(1f)) {
-            Txt(label, size = 15.sp)
-            if (sub != null) Txt(sub, size = 12.sp, color = Win.c.textDim, maxLines = 2)
-        }
-        Switch(
-            checked, onChange,
-            colors = SwitchDefaults.colors(checkedTrackColor = Win.c.accent, checkedThumbColor = Win.c.onAccent, uncheckedTrackColor = Color.Transparent, uncheckedBorderColor = Win.c.textDim, uncheckedThumbColor = Win.c.textDim),
-        )
-    }
-}
-
-@Composable
-fun SliderRow(label: String, value: Float, range: ClosedFloatingPointRange<Float>, onChange: (Float) -> Unit, valueText: String, modifier: Modifier = Modifier, onDone: () -> Unit = {}) {
-    Column(modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Txt(label, Modifier.weight(1f), 15.sp)
-            Txt(valueText, size = 13.sp, color = Win.c.textDim)
-        }
-        Slider(
-            value, onChange, valueRange = range, onValueChangeFinished = onDone,
-            colors = SliderDefaults.colors(thumbColor = Win.c.accent, activeTrackColor = Win.c.accent, inactiveTrackColor = Win.c.stroke),
-        )
-    }
-}
-
-/** Segmented chips: pick one. */
-@Composable
-fun <T> Segmented(options: List<Pair<String, T>>, selected: T, onSelect: (T) -> Unit, modifier: Modifier = Modifier) {
-    Row(modifier.clip(RoundedCornerShape(8.dp)).border(1.dp, Win.c.stroke, RoundedCornerShape(8.dp))) {
-        options.forEachIndexed { i, (label, v) ->
-            val sel = v == selected
-            Box(
-                Modifier.weight(1f).background(if (sel) Win.c.accent else Color.Transparent).clickable { onSelect(v) }.padding(vertical = 9.dp),
-                contentAlignment = Alignment.Center,
-            ) { Txt(label, size = 13.sp, color = if (sel) Win.c.onAccent else Win.c.text, weight = if (sel) FontWeight.SemiBold else null) }
-        }
-    }
-}
-
-@Composable
-fun Chip(label: String, selected: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
-    Box(
-        modifier.clip(RoundedCornerShape(16.dp))
-            .background(if (selected) Win.c.accent else Color.Transparent)
-            .border(1.dp, if (selected) Win.c.accent else Win.c.stroke, RoundedCornerShape(16.dp))
-            .clickable(onClick = onClick).padding(horizontal = 14.dp, vertical = 7.dp),
-    ) { Txt(label, size = 13.sp, color = if (selected) Win.c.onAccent else Win.c.text) }
-}
-
-@Composable
-fun PrimaryButton(label: String, onClick: () -> Unit, modifier: Modifier = Modifier, enabled: Boolean = true) {
-    Box(
-        modifier.clip(RoundedCornerShape(6.dp)).background(if (enabled) Win.c.accent else Win.c.stroke)
-            .clickable(enabled = enabled, onClick = onClick).padding(horizontal = 20.dp, vertical = 10.dp),
-        contentAlignment = Alignment.Center,
-    ) { Txt(label, size = 14.sp, color = if (enabled) Win.c.onAccent else Win.c.textDim, weight = FontWeight.SemiBold) }
-}
-
-@Composable
-fun GhostButton(label: String, onClick: () -> Unit, modifier: Modifier = Modifier, danger: Boolean = false) {
-    Box(
-        modifier.clip(RoundedCornerShape(6.dp)).border(1.dp, Win.c.stroke, RoundedCornerShape(6.dp))
-            .clickable(onClick = onClick).padding(horizontal = 18.dp, vertical = 10.dp),
-        contentAlignment = Alignment.Center,
-    ) { Txt(label, size = 14.sp, color = if (danger) Win.c.danger else Win.c.text) }
-}
+fun VDivider(modifier: Modifier = Modifier) { Box(modifier.width(1.dp).background(Win.c.stroke)) }
 
 @Composable
 fun SectionLabel(text: String, modifier: Modifier = Modifier) {
-    Txt(text, modifier.padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 6.dp), 12.sp, Win.c.accent, FontWeight.SemiBold)
+    Txt(text, 13.sp, FontWeight.SemiBold, Win.c.accent, modifier.padding(horizontal = 16.dp, vertical = 8.dp))
+}
+
+@Composable
+fun PrimaryButton(text: String, onClick: () -> Unit, modifier: Modifier = Modifier, enabled: Boolean = true, danger: Boolean = false, icon: ImageVector? = null) {
+    val c = Win.c
+    val bg = if (danger) c.danger else c.accent
+    Row(
+        modifier.heightIn(min = 44.dp).clip(RoundedCornerShape(8.dp))
+            .background(if (enabled) bg else bg.copy(alpha = 0.35f))
+            .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
+            .padding(horizontal = 18.dp),
+        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center
+    ) {
+        if (icon != null) { Icon(icon, null, tint = c.onAccent, modifier = Modifier.size(18.dp)); Spacer(Modifier.width(8.dp)) }
+        Txt(text, 14.sp, FontWeight.SemiBold, if (danger) Color.White else c.onAccent)
+    }
+}
+
+@Composable
+fun GhostButton(text: String, onClick: () -> Unit, modifier: Modifier = Modifier, enabled: Boolean = true, icon: ImageVector? = null) {
+    val c = Win.c
+    Row(
+        modifier.heightIn(min = 44.dp).clip(RoundedCornerShape(8.dp)).border(1.dp, c.stroke, RoundedCornerShape(8.dp))
+            .clickable(enabled = enabled, role = Role.Button, onClick = onClick).padding(horizontal = 18.dp),
+        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center
+    ) {
+        if (icon != null) { Icon(icon, null, tint = c.text, modifier = Modifier.size(18.dp)); Spacer(Modifier.width(8.dp)) }
+        Txt(text, 14.sp, FontWeight.Medium, if (enabled) c.text else c.text2)
+    }
+}
+
+@Composable
+fun Chip(text: String, selected: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier, icon: ImageVector? = null) {
+    val c = Win.c
+    val shape = RoundedCornerShape(18.dp)
+    Row(
+        modifier.heightIn(min = 36.dp).clip(shape)
+            .background(if (selected) c.accent else Color.Transparent)
+            .border(1.dp, if (selected) c.accent else c.stroke, shape)
+            .clickable(onClick = onClick).padding(horizontal = 14.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        if (icon != null) { Icon(icon, null, tint = if (selected) c.onAccent else c.text2, modifier = Modifier.size(16.dp)); Spacer(Modifier.width(6.dp)) }
+        Txt(text, 13.sp, FontWeight.Medium, if (selected) c.onAccent else c.text)
+    }
+}
+
+@Composable
+fun Segmented(options: List<String>, selected: Int, onSelect: (Int) -> Unit, modifier: Modifier = Modifier) {
+    val c = Win.c
+    val shape = RoundedCornerShape(8.dp)
+    Row(modifier.fillMaxWidth().clip(shape).border(1.dp, c.stroke, shape)) {
+        options.forEachIndexed { i, label ->
+            Box(
+                Modifier.weight(1f).heightIn(min = 40.dp).background(if (i == selected) c.accent else Color.Transparent).clickable { onSelect(i) },
+                contentAlignment = Alignment.Center
+            ) { Txt(label, 14.sp, FontWeight.Medium, if (i == selected) c.onAccent else c.text) }
+        }
+    }
+}
+
+@Composable
+fun SwitchRow(label: String, checked: Boolean, onChange: (Boolean) -> Unit, sub: String? = null, modifier: Modifier = Modifier) {
+    val c = Win.c
+    Row(
+        modifier.fillMaxWidth().clickable { onChange(!checked) }.padding(horizontal = 16.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(Modifier.weight(1f)) {
+            Txt(label, 15.sp)
+            if (sub != null) Txt(sub, 12.sp, color = c.text2, maxLines = 3)
+        }
+        Switch(
+            checked = checked, onCheckedChange = onChange,
+            colors = SwitchDefaults.colors(checkedThumbColor = c.onAccent, checkedTrackColor = c.accent, uncheckedThumbColor = c.text2, uncheckedTrackColor = c.hover, uncheckedBorderColor = c.stroke)
+        )
+    }
+}
+
+/** Applies the value when the finger lifts, so scaling the whole UI doesn't fight the slider while dragging. */
+@Composable
+fun SliderRow(label: String, value: Float, range: ClosedFloatingPointRange<Float>, valueText: (Float) -> String, onFinished: (Float) -> Unit, modifier: Modifier = Modifier, steps: Int = 0) {
+    val c = Win.c
+    var tmp by remember(value) { mutableFloatStateOf(value) }
+    Column(modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Txt(label, 15.sp)
+            Txt(valueText(tmp), 13.sp, color = c.text2)
+        }
+        Slider(
+            value = tmp, onValueChange = { tmp = it }, valueRange = range, steps = steps, onValueChangeFinished = { onFinished(tmp) },
+            colors = SliderDefaults.colors(thumbColor = c.accent, activeTrackColor = c.accent, inactiveTrackColor = c.hover)
+        )
+    }
+}
+
+/** Single-line text field in the Fluent style. */
+@Composable
+fun WinField(
+    value: TextFieldValue,
+    onValueChange: (TextFieldValue) -> Unit,
+    modifier: Modifier = Modifier,
+    placeholder: String = "",
+    autoFocus: Boolean = false,
+    password: Boolean = false,
+    imeAction: ImeAction = ImeAction.Done,
+    onDone: () -> Unit = {},
+    error: Boolean = false,
+    mono: Boolean = false,
+    singleLine: Boolean = true,
+    leading: (@Composable () -> Unit)? = null,
+) {
+    val c = Win.c
+    val focus = remember { FocusRequester() }
+    var focused by remember { mutableStateOf(false) }
+    if (autoFocus) LaunchedEffect(Unit) { delay(120); runCatching { focus.requestFocus() } }
+    val shape = RoundedCornerShape(8.dp)
+    val line = if (error) c.danger else if (focused) c.accent else c.stroke
+    BasicTextField(
+        value = value, onValueChange = onValueChange,
+        modifier = modifier.fillMaxWidth().focusRequester(focus).onFocusChanged { focused = it.isFocused },
+        singleLine = singleLine,
+        textStyle = TextStyle(color = c.text, fontSize = 16.sp, fontFamily = if (mono) FontFamily.Monospace else null),
+        cursorBrush = SolidColor(c.accent),
+        visualTransformation = if (password) PasswordVisualTransformation() else VisualTransformation.None,
+        keyboardOptions = KeyboardOptions(imeAction = imeAction),
+        keyboardActions = KeyboardActions(onDone = { onDone() }, onSearch = { onDone() }, onGo = { onDone() }),
+        decorationBox = { inner ->
+            Row(
+                Modifier.fillMaxWidth().heightIn(min = 48.dp).clip(shape).background(c.surface).border(if (focused) 2.dp else 1.dp, line, shape).padding(horizontal = 12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                if (leading != null) { leading(); Spacer(Modifier.width(8.dp)) }
+                Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
+                    if (value.text.isEmpty() && placeholder.isNotEmpty()) Txt(placeholder, 16.sp, color = c.text2)
+                    inner()
+                }
+            }
+        }
+    )
+}
+
+@Composable
+fun WinField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    modifier: Modifier = Modifier,
+    placeholder: String = "",
+    autoFocus: Boolean = false,
+    password: Boolean = false,
+    imeAction: ImeAction = ImeAction.Done,
+    onDone: () -> Unit = {},
+    error: Boolean = false,
+    mono: Boolean = false,
+    singleLine: Boolean = true,
+    leading: (@Composable () -> Unit)? = null,
+) {
+    var tfv by remember { mutableStateOf(TextFieldValue(value)) }
+    if (tfv.text != value) tfv = TextFieldValue(value)
+    WinField(
+        value = tfv,
+        onValueChange = { tfv = it; onValueChange(it.text) },
+        modifier = modifier,
+        placeholder = placeholder,
+        autoFocus = autoFocus,
+        password = password,
+        imeAction = imeAction,
+        onDone = onDone,
+        error = error,
+        mono = mono,
+        singleLine = singleLine,
+        leading = leading
+    )
+}
+
+// ---------------------------------------------------------------------------------------------- thumbnails
+@Composable
+fun Thumb(e: FileEntry, size: Dp, modifier: Modifier = Modifier, crop: Boolean = true) {
+    val px = with(LocalDensity.current) { size.roundToPx() }
+    if (Settings.s.thumbnails && Thumbs.supportsThumb(e)) {
+        var bmp by remember(e.path, e.modified) { mutableStateOf(Thumbs.peek(e, px)) }
+        // the short delay means rows that fly past during a fling never even start decoding (the effect is cancelled on leaving)
+        LaunchedEffect(e.path, e.modified, px) { if (bmp == null) { delay(40); bmp = Thumbs.load(e, px) } }
+        val b = bmp
+        if (b != null) {
+            val img = remember(b) { b.asImageBitmap() }
+            Image(img, null, modifier.size(size).clip(RoundedCornerShape(6.dp)), contentScale = if (crop) ContentScale.Crop else ContentScale.Fit)
+        } else FileGlyph(e.kind, size, modifier)
+    } else FileGlyph(e.kind, size, modifier)
+}
+
+// ---------------------------------------------------------------------------------------------- menus & sheets
+data class MenuEntry(
+    val label: String,
+    val icon: ImageVector? = null,
+    val enabled: Boolean = true,
+    val danger: Boolean = false,
+    val checked: Boolean = false,
+    val header: Boolean = false,
+    val divider: Boolean = false,
+    val onClick: () -> Unit = {},
+) {
+    companion object {
+        fun divider() = MenuEntry("", divider = true)
+        fun header(label: String) = MenuEntry(label, header = true)
+    }
+}
+
+class SheetSpec(val title: String?, val fromTop: Boolean = false, val content: @Composable (dismiss: () -> Unit) -> Unit)
+
+/** One global sheet slot, rendered by SheetHost at the very top of the screen. */
+object Sheets {
+    var current by mutableStateOf<SheetSpec?>(null)
+    fun show(title: String?, fromTop: Boolean = false, content: @Composable (dismiss: () -> Unit) -> Unit) { current = SheetSpec(title, fromTop, content) }
+    fun dismiss() { current = null }
+}
+
+@Composable
+fun SheetHost() {
+    val spec = Sheets.current ?: return
+    androidx.compose.runtime.key(spec) {
+        DragSheet(onDismiss = { if (Sheets.current === spec) Sheets.dismiss() }, fromTop = spec.fromTop, title = spec.title) {
+            spec.content { Sheets.dismiss() }
+        }
+    }
+}
+
+@Composable
+fun SheetRow(label: String, onClick: () -> Unit, icon: ImageVector? = null, sub: String? = null, danger: Boolean = false, checked: Boolean = false, enabled: Boolean = true) {
+    val c = Win.c
+    val col = if (danger) c.danger else c.text
+    Row(
+        Modifier.fillMaxWidth().heightIn(min = 52.dp).clickable(enabled = enabled, onClick = onClick).padding(horizontal = 20.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        if (icon != null) { Icon(icon, null, tint = if (enabled) (if (danger) c.danger else c.text2) else c.text2.copy(alpha = 0.4f), modifier = Modifier.size(22.dp)); Spacer(Modifier.width(16.dp)) }
+        Column(Modifier.weight(1f)) {
+            Txt(label, 16.sp, color = if (enabled) col else c.text2.copy(alpha = 0.6f))
+            if (sub != null) Txt(sub, 12.sp, color = c.text2, maxLines = 2)
+        }
+        if (checked) Icon(Icons.Filled.Check, null, tint = c.accent, modifier = Modifier.size(20.dp))
+    }
+}
+
+@Composable
+fun ActionList(entries: List<MenuEntry>, dismiss: () -> Unit) {
+    val c = Win.c
+    Column(Modifier.padding(bottom = 8.dp)) {
+        for (e in entries) when {
+            e.divider -> HDivider(Modifier.padding(vertical = 4.dp, horizontal = 16.dp))
+            e.header -> Txt(e.label, 12.sp, FontWeight.SemiBold, c.accent, Modifier.padding(start = 20.dp, top = 10.dp, bottom = 2.dp))
+            else -> SheetRow(e.label, { dismiss(); e.onClick() }, e.icon, danger = e.danger, checked = e.checked, enabled = e.enabled)
+        }
+    }
+}
+
+/**
+ * Wide screens: a classic drop-down menu anchored to the button.
+ * Phones: the same entries as a bottom sheet that can be dragged to full height.
+ */
+@Composable
+fun MenuAnchor(title: String, entries: () -> List<MenuEntry>, content: @Composable (open: () -> Unit) -> Unit) {
+    val wide = LocalWide.current
+    val c = Win.c
+    var open by remember { mutableStateOf(false) }
+    Box {
+        content {
+            if (wide) open = true else {
+                val list = entries()
+                Sheets.show(title) { dismiss -> ActionList(list, dismiss) }
+            }
+        }
+        if (wide) {
+            DropdownMenu(expanded = open, onDismissRequest = { open = false }, modifier = Modifier.background(c.card)) {
+                for (e in entries()) when {
+                    e.divider -> HDivider(Modifier.padding(vertical = 4.dp))
+                    e.header -> Txt(e.label, 12.sp, FontWeight.SemiBold, c.accent, Modifier.padding(start = 16.dp, top = 8.dp, end = 16.dp))
+                    else -> DropdownMenuItem(
+                        text = { Txt(e.label, 14.sp, color = if (e.danger) c.danger else c.text) },
+                        onClick = { open = false; e.onClick() },
+                        enabled = e.enabled,
+                        leadingIcon = e.icon?.let { ic -> { Icon(ic, null, tint = if (e.danger) c.danger else c.text2, modifier = Modifier.size(20.dp)) } },
+                        trailingIcon = if (e.checked) ({ Icon(Icons.Filled.Check, null, tint = c.accent, modifier = Modifier.size(18.dp)) }) else null,
+                    )
+                }
+            }
+        }
+    }
 }

@@ -1,324 +1,337 @@
 package com.lumen.explorer
 
-import android.app.Application
-import android.os.Handler
-import android.os.Looper
-import androidx.compose.runtime.derivedStateOf
+import android.content.Context
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.isActive
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
-import java.util.concurrent.Executors
 
-/** Where a tab is looking. */
 sealed class Loc {
     object Home : Loc()
     object Gallery : Loc()
-    object Device : Loc()
-    data class Dir(val path: String) : Loc()
-    data class Category(val cat: Cat) : Loc()
     object Recent : Loc()
     object Favorites : Loc()
     object Bin : Loc()
-    object Large : Loc()
-    object Duplicates : Loc()
+    object Device : Loc()
     object Analyzer : Loc()
-    data class Search(val query: String, val root: String) : Loc()
-
-    /** Lists that come pre-sorted (newest/largest first) and ignore the user's sort. */
-    val fixedOrder: Boolean get() = this is Gallery || this is Recent || this is Large || this is Category
-
-    fun encode(): String = when (this) {
-        Home -> "home"; Gallery -> "gallery"; Device -> "device"; Recent -> "recent"; Favorites -> "fav"; Bin -> "bin"
-        Large -> "large"; Duplicates -> "dupes"; Analyzer -> "analyzer"
-        is Dir -> "dir:$path"; is Category -> "cat:${cat.name}"; is Search -> "home"
-    }
-
-    fun title(vols: List<Volume>): String = when (this) {
-        Home -> "Home"; Gallery -> "Gallery"; Device -> "This device"; Recent -> "Recent files"; Favorites -> "Favorites"
-        Bin -> "Recycle Bin"; Large -> "Large files"; Duplicates -> "Duplicate files"; Analyzer -> "Storage analyzer"
-        is Dir -> vols.firstOrNull { it.path == path }?.label ?: Paths.name(path)
-        is Category -> cat.title
-        is Search -> "Search: $query"
-    }
-
-    companion object {
-        fun decode(s: String): Loc = when {
-            s == "gallery" -> Gallery; s == "device" -> Device; s == "recent" -> Recent; s == "fav" -> Favorites; s == "bin" -> Bin
-            s == "large" -> Large; s == "dupes" -> Duplicates; s == "analyzer" -> Analyzer
-            s.startsWith("dir:") -> s.removePrefix("dir:").let { if (File(it).isDirectory) Dir(it) else Home }
-            s.startsWith("cat:") -> runCatching { Category(Cat.valueOf(s.removePrefix("cat:"))) }.getOrDefault(Home)
-            else -> Home
-        }
-    }
+    object Large : Loc()
+    object Dupes : Loc()
+    object WebVault : Loc()
+    data class Dir(val path: String) : Loc()
+    data class Category(val cat: Cat) : Loc()
+    data class Search(val root: String, val query: String) : Loc()
+    data class Saf(val tree: String, val docId: String, val title: String) : Loc()
 }
 
-class BinEntry(val bin: RecycleBin, val item: RecycleBin.Item)
+fun Loc.title(): String = when (this) {
+    Loc.Home -> "Home"
+    Loc.Gallery -> "Gallery"
+    Loc.Recent -> "Recent"
+    Loc.Favorites -> "Favorites"
+    Loc.Bin -> "Recycle Bin"
+    Loc.Device -> "This device"
+    Loc.Analyzer -> "Storage analyzer"
+    Loc.Large -> "Large files"
+    Loc.Dupes -> "Duplicate finder"
+    Loc.WebVault -> "SecureVault"
+    is Loc.Dir -> Volumes.list.firstOrNull { it.root == path }?.label ?: Paths.name(path).ifEmpty { "Storage" }
+    is Loc.Category -> cat.label
+    is Loc.Search -> "Search: $query"
+    is Loc.Saf -> title
+}
 
-/** One Explorer tab. */
-class Tab(val id: Long, start: Loc) {
+/** True when this location lists real `FileEntry` rows through the generic browser. */
+fun Loc.isListing(): Boolean = this is Loc.Dir || this is Loc.Category || this is Loc.Search || this === Loc.Gallery || this === Loc.Recent || this === Loc.Favorites
+
+class Tab(start: Loc) {
+    val id = nextId++
     var loc by mutableStateOf(start)
-    private val back = ArrayList<Loc>()
-    private val fwd = ArrayList<Loc>()
+    val back = ArrayList<Loc>()
+    val fwd = ArrayList<Loc>()
     var canBack by mutableStateOf(false)
-    var canFwd by mutableStateOf(false)
-
+    var canForward by mutableStateOf(false)
+    var entries by mutableStateOf<List<FileEntry>>(emptyList())
     var selection by mutableStateOf<Set<String>>(emptySet())
-    var kindFilter by mutableStateOf<Kind?>(null)
-
-    // loaded data
-    var raw by mutableStateOf<List<FileEntry>>(emptyList())
     var loading by mutableStateOf(false)
     var error by mutableStateOf<String?>(null)
-    var restricted by mutableStateOf(false)
-    var binMap by mutableStateOf<Map<String, BinEntry>>(emptyMap())
-    var dupGroups by mutableStateOf<List<List<FileEntry>>>(emptyList())
-
-    /** Filtered + sorted list shown to the user. */
-    val shown: List<FileEntry> by derivedStateOf {
-        var l = raw
-        val kf = kindFilter
-        if (kf != null) l = l.filter { it.kind == kf || (kf == Kind.FOLDER && it.isDir) }
-        if (loc.fixedOrder) l else sortEntries(l, Settings.sortBy, Settings.sortAsc, Settings.foldersFirst)
-    }
-
-    val title: String get() = loc.title(AppState.volumes)
-
-    fun go(l: Loc, record: Boolean = true) {
-        if (l == loc) { AppState.rev++; return }
-        if (record) { back.add(loc); fwd.clear() }
-        loc = l; selection = emptySet(); kindFilter = null
-        sync()
-    }
-
-    fun goBack(): Boolean {
-        if (back.isEmpty()) return false
-        fwd.add(loc); loc = back.removeAt(back.lastIndex); selection = emptySet(); kindFilter = null; sync(); return true
-    }
-
-    fun goForward(): Boolean {
-        if (fwd.isEmpty()) return false
-        back.add(loc); loc = fwd.removeAt(fwd.lastIndex); selection = emptySet(); kindFilter = null; sync(); return true
-    }
-
-    fun parentLoc(): Loc? = when (val l = loc) {
-        is Loc.Dir -> {
-            val isRoot = AppState.volumes.any { it.path == l.path }
-            if (isRoot) Loc.Device else Paths.parent(l.path)?.let { Loc.Dir(it) } ?: Loc.Device
-        }
-        is Loc.Search -> Loc.Dir(l.root)
-        Loc.Home -> null
-        else -> Loc.Home
-    }
-
-    fun up(): Boolean { val p = parentLoc() ?: return false; go(p); return true }
-
-    private fun sync() { canBack = back.isNotEmpty(); canFwd = fwd.isNotEmpty(); AppState.persistTabs() }
-
-    val currentDir: String? get() = (loc as? Loc.Dir)?.path
+    var scrollKey by mutableIntStateOf(0)
+    var filter by mutableStateOf<Kind?>(null)
+    val scrollMemo = HashMap<Loc, IntArray>()
+    var job: kotlinx.coroutines.Job? = null
+    companion object { private var nextId = 1 }
 }
 
-class Clip(val paths: List<String>, val move: Boolean)
+data class Clip(val paths: List<String>, val cut: Boolean)
+
+enum class JobState { RUNNING, DONE, ERROR, CANCELLED }
 
 class Job(val id: Int, val title: String, val progress: Progress) {
-    var state by mutableIntStateOf(0)          // 0 running, 1 done, 2 failed, 3 cancelled
-    var frac by mutableFloatStateOf(0f)
-    var note by mutableStateOf("")
-    var indeterminate by mutableStateOf(true)
+    var state by mutableStateOf(JobState.RUNNING)
+    var message by mutableStateOf("")
+    var tick by mutableLongStateOf(0)
 }
 
-class Toast(val text: String, val action: String? = null, val onAction: (() -> Unit)? = null) { val id = System.nanoTime() }
+data class Toast(val id: Long, val message: String, val action: String? = null, val onAction: (() -> Unit)? = null)
 
-sealed class Dialog {
-    class Rename(val entry: FileEntry) : Dialog()
-    class NewItem(val dir: String, val folder: Boolean, val initial: String = if (folder) "New folder" else "New file.txt") : Dialog()
-    class Confirm(val title: String, val message: String, val confirm: String, val danger: Boolean = false, val onConfirm: () -> Unit) : Dialog()
-    class Conflicts(val names: List<String>, val move: Boolean, val onChoose: (Conflict) -> Unit) : Dialog()
-    class Compress(val paths: List<String>, val dir: String) : Dialog()
-    class Extract(val path: String) : Dialog()
-    class Password(val message: String, val onSubmit: (String) -> Unit) : Dialog()
-    class Properties(val entries: List<FileEntry>) : Dialog()
-    class Context(val entries: List<FileEntry>) : Dialog()
-    class Picker(val title: String, val actionLabel: String, val startDir: String, val onPick: (String) -> Unit) : Dialog()
-    class Info(val title: String, val lines: List<String>) : Dialog()
-    class Hash(val path: String) : Dialog()
-    class Jobs : Dialog()
+sealed class Dlg {
+    data class Rename(val entry: FileEntry) : Dlg()
+    data class NewItem(val dir: String, val folder: Boolean, val initial: String) : Dlg()
+    data class Confirm(val title: String, val message: String, val confirm: String, val danger: Boolean, val onYes: () -> Unit) : Dlg()
+    data class Conflicts(val sources: List<String>, val dest: String, val move: Boolean, val names: List<String>) : Dlg()
+    data class Compress(val paths: List<String>, val dir: String) : Dlg()
+    data class Extract(val path: String) : Dlg()
+    data class Password(val message: String, val onPassword: (String) -> Unit) : Dlg()
+    data class Properties(val paths: List<String>) : Dlg()
+    data class Context(val entry: FileEntry) : Dlg()
+    data class Picker(val title: String, val start: String, val onPick: (String) -> Unit) : Dlg()
+    data class Info(val title: String, val message: String) : Dlg()
+    data class Hash(val path: String) : Dlg()
+    data class ArchiveList(val path: String) : Dlg()
+    object Jobs : Dlg()
 }
 
-class ViewerReq(val paths: List<String>, val index: Int)
+sealed class ViewerReq {
+    data class Media(val items: List<FileEntry>, val index: Int) : ViewerReq()
+    data class Audio(val entry: FileEntry) : ViewerReq()
+    data class Text(val path: String) : ViewerReq()
+    data class Pdf(val path: String) : ViewerReq()
+}
 
-/** Process-wide UI state (single-activity app). */
 object AppState {
-    lateinit var app: Application
-    val main = Handler(Looper.getMainLooper())
-
-    var hasAllFiles by mutableStateOf(false)
-    var volumes by mutableStateOf<List<Volume>>(emptyList())
+    lateinit var app: Context
+    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
     val tabs = mutableStateListOf<Tab>()
-    var activeIndex by mutableIntStateOf(0)
-    val tab: Tab get() = tabs[activeIndex.coerceIn(0, tabs.lastIndex)]
-    private var tabSeq = 1L
+    var active by mutableIntStateOf(0)
+    val tab: Tab get() = tabs[active.coerceIn(0, tabs.lastIndex)]
 
-    /** Bumped whenever the file system may have changed → lists reload. */
-    var rev by mutableIntStateOf(0)
     var clip by mutableStateOf<Clip?>(null)
     val jobs = mutableStateListOf<Job>()
     var toast by mutableStateOf<Toast?>(null)
-    var dialog by mutableStateOf<Dialog?>(null)
+    var dialog by mutableStateOf<Dlg?>(null)
     var viewer by mutableStateOf<ViewerReq?>(null)
-    var topSheet by mutableStateOf(false)
-    var drawer by mutableStateOf(false)
-    var settingsOpen by mutableStateOf(false)
-    var addressEdit by mutableStateOf(false)
-    var searchOpen by mutableStateOf(false)
-    var storageTick by mutableLongStateOf(0L)
+    var binVersion by mutableIntStateOf(0)
+    var showSettings by mutableStateOf(false)
+    var showWelcome by mutableStateOf(false)
+    var showTopSheet by mutableStateOf(false)
+    var showDetails by mutableStateOf(false)
+    var searching by mutableStateOf(false)
+    var foreground = true
+    private var jobIds = 1
+    private var toastIds = 1L
 
-    private val pool = Executors.newFixedThreadPool(2)
-    private val io = Executors.newCachedThreadPool()
-    private var jobSeq = 1
-
-    fun init(a: Application) {
-        app = a
-        Settings.load(a)
-        refreshVolumes()
-        if (tabs.isEmpty()) {
-            val saved = Settings.openTabs.map { Loc.decode(it) }
-            val locs = if (saved.isEmpty()) listOf<Loc>(Loc.Home) else saved
-            locs.forEach { tabs.add(Tab(tabSeq++, it)) }
-            activeIndex = 0
-        }
-        io.execute { runCatching { bins().forEach { it.purgeOlderThan(Settings.binDays) } } }
+    fun init(ctx: Context) {
+        app = ctx.applicationContext
+        if (tabs.isEmpty()) tabs += Tab(Loc.Home)
     }
 
-    fun refreshVolumes() { volumes = Volumes.detect(app); storageTick++ }
-
-    fun persistTabs() { Settings.openTabs = tabs.map { it.loc.encode() }; Settings.save() }
-
-    // ---- tabs
-    fun newTab(loc: Loc = Loc.Home, switch: Boolean = true) {
-        tabs.add(Tab(tabSeq++, loc))
-        if (switch) activeIndex = tabs.lastIndex
-        persistTabs()
+    // ------------------------------------------------------------------ tabs & navigation
+    fun newTab(loc: Loc = Loc.Home, activate: Boolean = true) {
+        val t = Tab(loc); tabs += t
+        if (activate) active = tabs.lastIndex
+        load(t)
     }
 
     fun closeTab(i: Int) {
-        if (tabs.size <= 1) { tabs[0].go(Loc.Home); return }
+        if (tabs.size <= 1) { go(Loc.Home); return }
+        tabs[i].job?.cancel()
         tabs.removeAt(i)
-        if (activeIndex >= tabs.size) activeIndex = tabs.lastIndex
-        else if (i < activeIndex) activeIndex--
-        persistTabs()
+        active = active.coerceAtMost(tabs.lastIndex)
+        if (i < active) active--
+        active = active.coerceIn(0, tabs.lastIndex)
     }
 
-    fun go(l: Loc) { tab.go(l); drawer = false }
+    fun selectTab(i: Int) { active = i.coerceIn(0, tabs.lastIndex) }
+
+    fun go(loc: Loc, push: Boolean = true) {
+        val t = tab
+        if (push && t.loc != loc) { t.back += t.loc; t.fwd.clear() }
+        t.loc = loc
+        t.selection = emptySet()
+        t.canBack = t.back.isNotEmpty(); t.canForward = t.fwd.isNotEmpty()
+        load(t)
+    }
+
     fun goDir(path: String) = go(Loc.Dir(path))
 
-    // ---- bins
-    private val binCache = HashMap<String, RecycleBin>()
-    fun binFor(root: String): RecycleBin = synchronized(binCache) { binCache.getOrPut(root) { RecycleBin(root) } }
-    fun bins(): List<RecycleBin> = volumes.map { binFor(it.path) }
-    fun binForPath(path: String): RecycleBin = binFor(Volumes.rootOf(path, volumes))
+    fun back() {
+        val t = tab
+        if (t.back.isEmpty()) return
+        t.fwd += t.loc
+        go(t.back.removeAt(t.back.lastIndex), push = false)
+    }
 
-    // ---- loading
-    suspend fun load(t: Tab) {
-        val loc = t.loc
-        t.loading = true; t.error = null; t.restricted = false
-        val showHidden = Settings.showHidden
-        val ctx = app
-        val roots = volumes.map { it.path }
-        try {
-            val result: List<FileEntry> = withContext(Dispatchers.IO) {
-                when (loc) {
-                    is Loc.Dir -> {
-                        val l = FileOps.list(loc.path, showHidden)
-                        if (l == null) { t.restricted = Volumes.isRestricted(loc.path); t.error = if (t.restricted) "Android doesn't let apps open this folder." else "Can't open this folder. Check that All files access is granted."; emptyList() } else l
+    fun forward() {
+        val t = tab
+        if (t.fwd.isEmpty()) return
+        t.back += t.loc
+        go(t.fwd.removeAt(t.fwd.lastIndex), push = false)
+    }
+
+    fun up() {
+        val l = tab.loc
+        if (l is Loc.Dir) {
+            val vol = Volumes.rootFor(l.path)
+            if (vol != null && vol.root == l.path.trimEnd('/')) go(Loc.Device) else goDir(Paths.parent(l.path))
+        } else if (l is Loc.Saf) { if (tab.canBack) back() else go(Loc.Device) }
+        else if (l !== Loc.Home) go(Loc.Home)
+    }
+
+    fun canUp(): Boolean = tab.loc !== Loc.Home
+
+    fun refresh() = load(tab)
+
+    // ------------------------------------------------------------------ loading
+    fun sorted(list: List<FileEntry>): List<FileEntry> =
+        Settings.s.let { sortEntries(list, it.sortBy, it.sortAsc, it.foldersFirst) }
+
+    fun load(t: Tab) {
+        t.job?.cancel()
+        t.error = null
+        when (val loc = t.loc) {
+            is Loc.Dir -> {
+                t.loading = true
+                t.job = scope.launch {
+                    val showHidden = Settings.s.showHidden
+                    val res = withContext(Dispatchers.IO) {
+                        val f = File(loc.path)
+                        val l = FileOps.list(f, showHidden, true)
+                        if (l == null) null to (if (!f.exists()) "This folder no longer exists." else restrictionMessage(loc.path))
+                        else sorted(l) to null
                     }
-                    is Loc.Category -> MediaIndex.byCategory(ctx, loc.cat, showHidden, roots)
-                    Loc.Gallery -> MediaIndex.gallery(ctx, showHidden, roots)
-                    Loc.Recent -> MediaIndex.recent(ctx, showHidden)
-                    Loc.Large -> MediaIndex.large(ctx, 50L * 1024 * 1024, 300, showHidden, roots)
-                    Loc.Favorites -> Settings.favorites.map { File(it) }.filter { it.exists() }.map { FileEntry.of(it) }
-                    is Loc.Search -> FileOps.search(loc.root, loc.query, showHidden, 3000) { !isActive }
-                    Loc.Bin -> {
-                        val map = HashMap<String, BinEntry>()
-                        val out = ArrayList<FileEntry>()
-                        for (b in bins()) for (it in b.list()) {
-                            map[it.storedPath] = BinEntry(b, it)
-                            out.add(FileEntry(it.storedPath, it.name, it.isDir, it.size, it.deletedAt, hidden = false))
+                    if (t.loc == loc) {
+                        t.entries = res.first ?: emptyList()
+                        t.error = res.second
+                        t.loading = false
+                    }
+                }
+            }
+            is Loc.Category -> streamFromIndex(t) { FileIndex.entries(loc.cat).let { l -> if (!Settings.s.showHidden) l.filter { !it.hidden } else l } }
+            Loc.Gallery -> streamFromIndex(t, fixedDateDesc = true) {
+                (FileIndex.entries(Cat.IMAGES) + FileIndex.entries(Cat.VIDEOS)).filter { Settings.s.showHidden || !it.hidden }
+            }
+            Loc.Recent -> streamFromIndex(t, fixedDateDesc = true) { FileIndex.recent(300) }
+            Loc.Favorites -> {
+                t.loading = true
+                t.job = scope.launch {
+                    val l = withContext(Dispatchers.IO) { Settings.s.favorites.map { File(it) }.filter { it.exists() }.map { FileOps.entry(it, if (it.isDirectory) FileOps.countChildren(it, Settings.s.showHidden) else -1) } }
+                    t.entries = sorted(l); t.loading = false
+                }
+            }
+            is Loc.Search -> {
+                t.entries = emptyList(); t.loading = true
+                t.job = scope.launch {
+                    val q = FileOps.parseQuery(loc.query)
+                    val acc = ArrayList<FileEntry>()
+                    withContext(Dispatchers.IO) {
+                        FileOps.search(File(loc.root), q, Settings.s.showHidden, 3000, cancel = { !isActiveLoc(t, loc) }) { batch ->
+                            synchronized(acc) { acc += batch }
+                            val snap = synchronized(acc) { ArrayList(acc) }
+                            scope.launch { if (isActiveLoc(t, loc)) t.entries = snap }
                         }
-                        t.binMap = map
-                        out.sortedByDescending { it.modified }
                     }
-                    Loc.Duplicates -> {
-                        val groups = roots.take(1).flatMap { FileOps.findDuplicates(it, 100 * 1024L) { !isActive } }
-                        t.dupGroups = groups
-                        groups.flatten()
-                    }
-                    else -> emptyList()
+                    if (isActiveLoc(t, loc)) { t.entries = sorted(synchronized(acc) { ArrayList(acc) }); t.loading = false }
                 }
             }
-            if (t.loc == loc) t.raw = result
-        } catch (c: kotlinx.coroutines.CancellationException) {
-            throw c
-        } catch (e: Throwable) {
-            t.error = e.message ?: "Couldn't load"
-        } finally { if (t.loc == loc) t.loading = false }
-    }
-
-    fun changed(paths: Collection<String> = emptyList()) {
-        if (paths.isNotEmpty()) io.execute { MediaIndex.scan(app, paths) }
-        refreshVolumesSoon()
-        rev++
-    }
-
-    private fun refreshVolumesSoon() { main.postDelayed({ refreshVolumes() }, 600) }
-
-    // ---- UI helpers
-    fun toast(text: String, action: String? = null, onAction: (() -> Unit)? = null) { toast = Toast(text, action, onAction) }
-
-    // ---- jobs
-    fun startJob(title: String, work: (Progress) -> OpResult, done: (OpResult) -> Unit = {}): Job {
-        val p = Progress()
-        val job = Job(jobSeq++, title, p)
-        jobs.add(job)
-        ticker()
-        pool.execute {
-            val r = try { work(p) } catch (t: Throwable) { OpResult().also { it.errors.add(t.message ?: t.javaClass.simpleName) } }
-            main.post {
-                job.state = when { r.cancelled -> 3; r.errors.isNotEmpty() && r.done == 0 -> 2; else -> 1 }
-                job.frac = 1f
-                changed(r.touched)
-                done(r)
-                main.postDelayed({ jobs.remove(job) }, 1500)
-            }
+            else -> { t.entries = emptyList(); t.loading = false }
         }
-        return job
     }
 
-    private var ticking = false
-    private fun ticker() {
-        if (ticking) return
-        ticking = true
-        main.post(object : Runnable {
-            override fun run() {
-                var any = false
-                for (j in jobs) if (j.state == 0) {
-                    any = true
-                    j.indeterminate = j.progress.total <= 0
-                    j.frac = j.progress.fraction; j.note = j.progress.note
+    private fun isActiveLoc(t: Tab, loc: Loc) = t.loc == loc && t.job?.isActive != false
+
+    private fun streamFromIndex(t: Tab, fixedDateDesc: Boolean = false, produce: () -> List<FileEntry>) {
+        t.loading = true
+        FileIndex.scan(app)
+        val loc = t.loc
+        t.job = scope.launch {
+            var rounds = 0
+            while (t.loc == loc) {
+                val l = withContext(Dispatchers.Default) {
+                    val p = produce()
+                    if (fixedDateDesc) p.sortedByDescending { it.modified } else sorted(p)
                 }
-                if (any) main.postDelayed(this, 150) else ticking = false
+                if (t.loc != loc) break
+                t.entries = l
+                val scanning = FileIndex.state.scanning
+                t.loading = scanning && l.isEmpty()
+                if (!scanning) break
+                delay(if (rounds++ < 3) 700 else 1500)
             }
-        })
+            if (t.loc == loc) t.loading = false
+        }
     }
 
-    fun io(block: () -> Unit) = io.execute(block)
-    fun onMain(block: () -> Unit) { main.post(block) }
+    private fun restrictionMessage(path: String): String =
+        if (android.os.Build.VERSION.SDK_INT >= 30 && (path.contains("/Android/data") || path.contains("/Android/obb")))
+            "Android 11 and later block every third-party app from /Android/data and /Android/obb. Use the system Files app for these two folders."
+        else if (!Perms.hasAllFiles(app)) "Allow \"All files access\" in Settings to open this folder."
+        else "This folder can't be read."
+
+    // ------------------------------------------------------------------ selection
+    fun toggleSelect(path: String) { val t = tab; t.selection = if (path in t.selection) t.selection - path else t.selection + path }
+    fun select(paths: Set<String>) { tab.selection = paths }
+    fun selectAll() { tab.selection = tab.entries.map { it.path }.toSet() }
+    fun clearSelection() { tab.selection = emptySet() }
+    fun selectionClear() = clearSelection()
+    fun selectedEntries(): List<FileEntry> { val t = tab; val s = t.selection; return t.entries.filter { it.path in s } }
+
+    // ------------------------------------------------------------------ recycle bin
+    private val bins = HashMap<String, RecycleBin>()
+    fun binFor(path: String): RecycleBin {
+        val root = Volumes.rootFor(path)?.root ?: @Suppress("DEPRECATION") android.os.Environment.getExternalStorageDirectory().absolutePath
+        return synchronized(bins) { bins.getOrPut(root) { RecycleBin(File(root)) } }
+    }
+    fun allBins(): List<RecycleBin> {
+        val roots = Volumes.list.map { it.root }.ifEmpty { listOf(@Suppress("DEPRECATION") android.os.Environment.getExternalStorageDirectory().absolutePath) }
+        return roots.map { r -> synchronized(bins) { bins.getOrPut(r) { RecycleBin(File(r)) } } }
+    }
+
+    // ------------------------------------------------------------------ jobs / toasts / change notifications
+    fun startJob(title: String, work: (Progress) -> OpResult, done: (OpResult) -> Unit) {
+        val p = Progress()
+        val job = Job(jobIds++, title, p)
+        jobs += job
+        scope.launch {
+            val ticker = launch { while (true) { job.tick = System.nanoTime(); delay(150) } }
+            val res = withContext(Dispatchers.IO) { runCatching { work(p) }.getOrElse { OpResult().apply { errors += (it.message ?: "Failed") } } }
+            ticker.cancel()
+            job.state = when { res.cancelled -> JobState.CANCELLED; res.errors.isNotEmpty() && res.done == 0 -> JobState.ERROR; else -> JobState.DONE }
+            job.message = when {
+                res.cancelled -> "Cancelled"
+                res.errors.isNotEmpty() -> res.errors.first()
+                else -> "Done"
+            }
+            done(res)
+            if (!foreground && job.state == JobState.DONE) Notifier.jobDone(app, title)
+            delay(8000)
+            if (job.state != JobState.RUNNING) jobs.remove(job)
+        }
+    }
+
+    fun toast(message: String, action: String? = null, onAction: (() -> Unit)? = null) {
+        toast = Toast(toastIds++, message, action, onAction)
+    }
+
+    /** Call after any change on disk so open tabs, the index and free-space numbers stay correct. */
+    fun changed(paths: List<String> = emptyList(), removed: Collection<String> = emptyList(), added: Collection<FileEntry> = emptyList()) {
+        if (removed.isNotEmpty()) FileIndex.remove(removed)
+        if (added.isNotEmpty()) FileIndex.add(added)
+        binVersion++
+        val parents = paths.map { Paths.parent(it) }.toSet() + paths.toSet()
+        for (t in tabs) {
+            val l = t.loc
+            if (l is Loc.Dir && (l.path in parents || paths.isEmpty())) load(t)
+            else if (l is Loc.Category || l === Loc.Gallery || l === Loc.Recent || l === Loc.Favorites || l is Loc.Search) load(t)
+        }
+        scope.launch(Dispatchers.IO) { Volumes.refresh(app) }
+    }
 }

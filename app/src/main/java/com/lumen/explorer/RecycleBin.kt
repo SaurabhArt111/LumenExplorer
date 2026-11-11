@@ -2,133 +2,94 @@ package com.lumen.explorer
 
 import java.io.File
 
-/**
- * Per-volume Recycle Bin: `<volumeRoot>/.LumenBin/` holding the payload files and an `index.tsv`
- * (id, originalPath, displayName, deletedAt, size, isDir). A `.nomedia` keeps galleries clean.
- * Items are moved with rename (instant, same volume) with copy+delete as fallback.
- */
-class RecycleBin(private val volumeRoot: String) {
+/** One bin per storage volume: `<volume root>/.LumenBin` with a tab-separated index. */
+class RecycleBin(val root: File) {
+    data class Item(val id: String, val originalPath: String, val name: String, val deletedAt: Long, val size: Long, val isDir: Boolean)
 
-    data class Item(val id: String, val original: String, val name: String, val deletedAt: Long, val size: Long, val isDir: Boolean, val storedPath: String)
-
-    private val dir = File(volumeRoot, ".LumenBin")
+    private val dir = File(root, ".LumenBin")
     private val index = File(dir, "index.tsv")
 
     private fun esc(s: String) = s.replace("\\", "\\\\").replace("\t", "\\t").replace("\n", "\\n")
     private fun unesc(s: String): String {
-        val sb = StringBuilder(); var i = 0
+        val sb = StringBuilder()
+        var i = 0
         while (i < s.length) {
             val c = s[i]
             if (c == '\\' && i + 1 < s.length) {
-                when (s[i + 1]) { 't' -> sb.append('\t'); 'n' -> sb.append('\n'); '\\' -> sb.append('\\'); else -> sb.append(s[i + 1]) }
+                when (s[i + 1]) { 't' -> sb.append('\t'); 'n' -> sb.append('\n'); else -> sb.append(s[i + 1]) }
                 i += 2
             } else { sb.append(c); i++ }
         }
         return sb.toString()
     }
 
-    private fun ensure(): Boolean {
-        if (!dir.exists() && !dir.mkdirs()) return false
-        val nm = File(dir, ".nomedia"); if (!nm.exists()) runCatching { nm.createNewFile() }
-        return true
-    }
-
-    @Synchronized fun list(): List<Item> {
+    @Synchronized fun items(): List<Item> {
         if (!index.exists()) return emptyList()
         val out = ArrayList<Item>()
         index.forEachLine { line ->
             val p = line.split('\t')
-            if (p.size >= 6) {
-                val id = p[0]
-                val stored = File(dir, id)
-                if (stored.exists()) out.add(Item(id, unesc(p[1]), unesc(p[2]), p[3].toLongOrNull() ?: 0L, p[4].toLongOrNull() ?: 0L, p[5] == "1", stored.absolutePath))
+            if (p.size >= 6 && File(dir, p[0]).exists()) {
+                out += Item(p[0], unesc(p[1]), unesc(p[2]), p[3].toLongOrNull() ?: 0, p[4].toLongOrNull() ?: 0, p[5] == "1")
             }
         }
-        return out
+        return out.sortedByDescending { it.deletedAt }
     }
 
-    private fun save(items: List<Item>) {
-        ensure()
-        val tmp = File(dir, "index.tsv.tmp")
-        tmp.writeText(items.joinToString("\n") { "${it.id}\t${esc(it.original)}\t${esc(it.name)}\t${it.deletedAt}\t${it.size}\t${if (it.isDir) 1 else 0}" } + if (items.isEmpty()) "" else "\n")
-        if (!tmp.renameTo(index)) { index.writeText(tmp.readText()); tmp.delete() }
+    private fun save(list: List<Item>) {
+        dir.mkdirs()
+        index.writeText(list.joinToString("\n") { "${it.id}\t${esc(it.originalPath)}\t${esc(it.name)}\t${it.deletedAt}\t${it.size}\t${if (it.isDir) 1 else 0}" })
     }
 
-    /** Move files into the bin. Returns the number moved; failures are listed in [res]. */
-    @Synchronized fun moveToBin(paths: List<String>, res: OpResult = OpResult()): List<Item> {
-        if (!ensure()) { res.errors.add("Can't create the Recycle Bin on this storage."); return emptyList() }
-        val items = list().toMutableList()
-        val added = ArrayList<Item>()
-        val now = System.currentTimeMillis()
-        for (p in paths) {
-            val f = File(p)
-            if (!f.exists()) continue
-            if (Paths.isInside(f.absolutePath, dir.absolutePath)) continue
-            val id = java.lang.Long.toString(now, 36) + "_" + java.lang.Integer.toString((Math.random() * 1_000_000).toInt() + items.size + added.size, 36)
-            val size = if (f.isDirectory) FileOps.totalBytes(listOf(p)) else f.length()
-            val isDir = f.isDirectory
-            val stored = File(dir, id)
-            val ok = if (f.renameTo(stored)) true else {
-                val r = FileOps.transfer(listOf(p), dir.absolutePath, move = true, policy = Conflict.KEEP_BOTH)
-                // transfer keeps the original name; rename it to the id
-                val moved = File(dir, f.name)
-                if (r.errors.isEmpty() && moved.exists() && moved.renameTo(stored)) true else { res.errors.addAll(r.errors); false }
-            }
-            if (ok) {
-                val it = Item(id, f.absolutePath, f.name, now, size, isDir, stored.absolutePath)
-                added.add(it); res.done++; res.touched.add(p)
-            } else res.errors.add("${f.name}: couldn't move to Recycle Bin")
+    @Synchronized fun trash(path: String, now: Long = System.currentTimeMillis()): Result<Item> = runCatching {
+        val src = File(path)
+        if (!src.exists()) error("not found")
+        dir.mkdirs()
+        val id = "${now}_${(Math.random() * 1_000_000).toInt()}"
+        val dst = File(dir, id)
+        val isDir = src.isDirectory
+        val size = if (isDir) FileOps.tally(listOf(path)).bytes else src.length()
+        if (!src.renameTo(dst)) {
+            val r = FileOps.transfer(listOf(path), dir, move = false, policy = Conflict.KEEP_BOTH, progress = Progress())
+            val made = r.created.firstOrNull() ?: error("can't move to bin")
+            File(made).renameTo(dst)
+            FileOps.deleteRecursive(src)
         }
-        save(items + added)
-        return added
+        val it = Item(id, src.absolutePath, src.name, now, size, isDir)
+        save(items() + it)
+        it
     }
 
-    /** Restore to original location (recreating folders). Collisions get "name (1)". */
-    @Synchronized fun restore(ids: Set<String>, res: OpResult = OpResult(), toDir: String? = null): OpResult {
-        val items = list().toMutableList()
-        val keep = ArrayList<Item>()
-        for (it in items) {
-            if (it.id !in ids) { keep.add(it); continue }
-            try {
-                val origin = File(it.original)
-                val parent = if (toDir != null) File(toDir) else origin.parentFile ?: File(volumeRoot)
-                parent.mkdirs()
-                val target = FileOps.uniqueNumbered(parent, if (toDir != null) it.name else origin.name)
-                val stored = File(it.storedPath)
-                if (stored.renameTo(target)) { res.done++; res.touched.add(target.absolutePath); res.created.add(target.absolutePath) }
-                else {
-                    val r = FileOps.transfer(listOf(stored.absolutePath), parent.absolutePath, move = true, policy = Conflict.KEEP_BOTH)
-                    if (r.errors.isEmpty()) {
-                        val got = File(parent, stored.name)
-                        if (got.renameTo(target)) { res.done++; res.touched.add(target.absolutePath); res.created.add(target.absolutePath) } else { keep.add(it); res.errors.add("${it.name}: couldn't restore") }
-                    } else { keep.add(it); res.errors.addAll(r.errors) }
-                }
-            } catch (t: Throwable) { keep.add(it); res.errors.add("${it.name}: ${t.message}") }
+    @Synchronized fun restore(item: Item): Result<File> = runCatching {
+        val src = File(dir, item.id)
+        if (!src.exists()) error("item is gone")
+        val orig = File(item.originalPath)
+        orig.parentFile?.mkdirs()
+        val target = if (orig.exists()) FileOps.uniqueFile(orig.parentFile!!, orig.name) else orig
+        if (!src.renameTo(target)) {
+            val r = FileOps.transfer(listOf(src.absolutePath), target.parentFile!!, move = true, policy = Conflict.KEEP_BOTH, progress = Progress())
+            if (r.errors.isNotEmpty()) error(r.errors.first())
+            val made = File(r.created.first())
+            if (made.absolutePath != target.absolutePath) made.renameTo(target)
         }
-        save(keep)
-        return res
+        save(items().filter { it.id != item.id })
+        target
     }
 
-    @Synchronized fun deleteForever(ids: Set<String>, res: OpResult = OpResult()): OpResult {
-        val items = list()
-        val keep = ArrayList<Item>()
-        for (it in items) {
-            if (it.id in ids) { if (FileOps.deleteRecursive(File(it.storedPath), res)) res.done++ else keep.add(it) } else keep.add(it)
-        }
-        save(keep)
-        return res
+    @Synchronized fun purge(ids: Collection<String>) {
+        val set = ids.toSet()
+        items().filter { it.id in set }.forEach { FileOps.deleteRecursive(File(dir, it.id)) }
+        save(items().filter { it.id !in set })
     }
 
-    fun empty(res: OpResult = OpResult()): OpResult = deleteForever(list().map { it.id }.toSet(), res)
+    @Synchronized fun empty() { purge(items().map { it.id }) }
 
-    /** Auto-purge items older than [days]. Returns how many were purged. */
-    fun purgeOlderThan(days: Int, now: Long = System.currentTimeMillis()): Int {
+    @Synchronized fun purgeOlderThan(days: Int, now: Long = System.currentTimeMillis()): Int {
         if (days <= 0) return 0
-        val cutoff = now - days * 86_400_000L
-        val old = list().filter { it.deletedAt < cutoff }.map { it.id }.toSet()
-        if (old.isEmpty()) return 0
-        return deleteForever(old).done
+        val cut = now - days * 86_400_000L
+        val old = items().filter { it.deletedAt < cut }.map { it.id }
+        purge(old)
+        return old.size
     }
 
-    fun totalBytes(): Long = list().sumOf { it.size }
+    fun totalSize(): Long = items().sumOf { it.size }
 }

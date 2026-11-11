@@ -1,89 +1,91 @@
 package com.lumen.explorer.ui
 
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Android
-import androidx.compose.material.icons.outlined.Code
-import androidx.compose.material.icons.outlined.Description
-import androidx.compose.material.icons.outlined.FolderZip
-import androidx.compose.material.icons.outlined.Image
-import androidx.compose.material.icons.outlined.InsertDriveFile
-import androidx.compose.material.icons.outlined.MusicNote
-import androidx.compose.material.icons.outlined.PictureAsPdf
-import androidx.compose.material.icons.outlined.Videocam
+import androidx.compose.material.icons.filled.Android
+import androidx.compose.material.icons.filled.Archive
+import androidx.compose.material.icons.filled.AudioFile
+import androidx.compose.material.icons.filled.Book
+import androidx.compose.material.icons.filled.Code
+import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.FontDownload
+import androidx.compose.material.icons.filled.InsertDriveFile
+import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.PictureAsPdf
+import androidx.compose.material.icons.filled.Slideshow
+import androidx.compose.material.icons.filled.Storage
+import androidx.compose.material.icons.filled.TableChart
+import androidx.compose.material.icons.filled.TextSnippet
+import androidx.compose.material.icons.filled.VideoFile
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
-import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.lumen.explorer.Kind
 import com.lumen.explorer.Settings
 
-/** Windows-11 (Fluent) inspired palette. */
-@Immutable
+/** Windows 11 flavoured palette (Mica-like backgrounds, Fluent card strokes). */
 class WinColors(
     val dark: Boolean,
-    val bg: Color,          // "mica" – title/tab/sidebar background
-    val surface: Color,     // main content layer
-    val card: Color,        // raised surfaces: address bar, dialogs, menus
+    val bg: Color,
+    val surface: Color,
+    val card: Color,
+    val hover: Color,
     val stroke: Color,
     val text: Color,
-    val textDim: Color,
+    val text2: Color,
     val accent: Color,
     val onAccent: Color,
-    val selected: Color,    // selected row tint
-    val hover: Color,
+    val accentSoft: Color,
     val danger: Color,
     val scrim: Color,
-)
-
-val Accents: List<Pair<String, Color>> = listOf(
-    "Blue" to Color(0xFF0067C0), "Teal" to Color(0xFF038387), "Green" to Color(0xFF107C10), "Gold" to Color(0xFFC19C00),
-    "Orange" to Color(0xFFF7630C), "Red" to Color(0xFFD13438), "Pink" to Color(0xFFC239B3), "Purple" to Color(0xFF8764B8),
-)
-
-private fun winColors(dark: Boolean, accentIdx: Int): WinColors {
-    val base = Accents[accentIdx.coerceIn(0, Accents.lastIndex)].second
-    return if (dark) {
-        val acc = lerp(base, Color.White, 0.38f)
-        WinColors(
-            dark = true, bg = Color(0xFF202020), surface = Color(0xFF272727), card = Color(0xFF2D2D2D), stroke = Color(0xFF3D3D3D),
-            text = Color(0xFFFFFFFF), textDim = Color(0xFFB4B4B4), accent = acc, onAccent = Color(0xFF000000),
-            selected = acc.copy(alpha = 0.22f), hover = Color(0x14FFFFFF), danger = Color(0xFFFF99A4), scrim = Color(0x99000000),
-        )
-    } else {
-        WinColors(
-            dark = false, bg = Color(0xFFF3F3F3), surface = Color(0xFFFBFBFB), card = Color(0xFFFFFFFF), stroke = Color(0xFFE0E0E0),
-            text = Color(0xFF1A1A1A), textDim = Color(0xFF5F5F5F), accent = base, onAccent = Color(0xFFFFFFFF),
-            selected = base.copy(alpha = 0.14f), hover = Color(0x0F000000), danger = Color(0xFFC42B1C), scrim = Color(0x66000000),
-        )
-    }
+) {
+    val textDim: Color get() = text2
 }
 
-val LocalWin = staticCompositionLocalOf<WinColors> { error("LumenTheme missing") }
+val AccentNames = listOf("Blue", "Teal", "Green", "Purple", "Pink", "Orange", "Red", "Graphite")
+private val AccentLight = listOf(0xFF0F6CBD, 0xFF00817A, 0xFF2E7D32, 0xFF6B4FBB, 0xFFC2185B, 0xFFD9660A, 0xFFC62828, 0xFF515A66).map { Color(it) }
+private val AccentDark = listOf(0xFF4CA0F0, 0xFF3DD6C8, 0xFF66D17A, 0xFFA78BFA, 0xFFF472B6, 0xFFFFA24D, 0xFFFF7A7A, 0xFFB4BCC8).map { Color(it) }
+fun accentSwatch(i: Int, dark: Boolean): Color = (if (dark) AccentDark else AccentLight)[i.coerceIn(0, 7)]
+
+private fun lightWin(a: Color) = WinColors(
+    dark = false, bg = Color(0xFFF3F3F3), surface = Color(0xFFFFFFFF), card = Color(0xFFFFFFFF), hover = Color(0xFFEAEAEA),
+    stroke = Color(0xFFE0E0E0), text = Color(0xFF1B1B1B), text2 = Color(0xFF616161), accent = a, onAccent = Color.White,
+    accentSoft = a.copy(alpha = 0.14f), danger = Color(0xFFC42B1C), scrim = Color(0x66000000),
+)
+
+private fun darkWin(a: Color) = WinColors(
+    dark = true, bg = Color(0xFF202020), surface = Color(0xFF2B2B2B), card = Color(0xFF2D2D2D), hover = Color(0xFF383838),
+    stroke = Color(0xFF3F3F3F), text = Color(0xFFF2F2F2), text2 = Color(0xFFA6A6A6), accent = a, onAccent = Color(0xFF0A0A0A),
+    accentSoft = a.copy(alpha = 0.20f), danger = Color(0xFFFF8A80), scrim = Color(0x99000000),
+)
+
+val LocalWin = staticCompositionLocalOf { lightWin(AccentLight[0]) }
 val LocalWide = compositionLocalOf { false }
 
 object Win {
@@ -91,109 +93,106 @@ object Win {
 }
 
 @Composable
-fun isDarkTheme(): Boolean = when (Settings.theme) { "dark" -> true; "light" -> false; else -> isSystemInDarkTheme() }
+fun isDarkTheme(): Boolean {
+    val s = Settings.s
+    val sys = isSystemInDarkTheme()
+    return when (s.theme) { "dark" -> true; "light" -> false; else -> sys }
+}
 
 @Composable
 fun LumenTheme(content: @Composable () -> Unit) {
+    val s = Settings.s
     val dark = isDarkTheme()
-    val w = winColors(dark, Settings.accent)
+    val accent = accentSwatch(s.accent, dark)
+    val c = if (dark) darkWin(accent) else lightWin(accent)
+    val base = LocalDensity.current
+    // "Interface size" scales everything (dp + sp); "Text size" additionally scales sp only.
+    val density = Density(density = base.density * s.uiScale, fontScale = base.fontScale * s.textScale)
     val scheme = if (dark) darkColorScheme(
-        primary = w.accent, onPrimary = w.onAccent, secondary = w.accent, background = w.bg, onBackground = w.text,
-        surface = w.card, onSurface = w.text, surfaceVariant = w.surface, onSurfaceVariant = w.textDim,
-        outline = w.stroke, outlineVariant = w.stroke, error = w.danger,
-        surfaceContainer = w.card, surfaceContainerHigh = w.card, surfaceContainerHighest = w.card, surfaceContainerLow = w.surface, surfaceContainerLowest = w.surface,
-        primaryContainer = w.selected, onPrimaryContainer = w.text, secondaryContainer = w.selected, onSecondaryContainer = w.text,
-        surfaceTint = Color.Transparent,
+        primary = c.accent, onPrimary = c.onAccent, background = c.bg, surface = c.surface, onSurface = c.text, onBackground = c.text,
+        surfaceVariant = c.card, onSurfaceVariant = c.text2, outline = c.stroke, error = c.danger,
     ) else lightColorScheme(
-        primary = w.accent, onPrimary = w.onAccent, secondary = w.accent, background = w.bg, onBackground = w.text,
-        surface = w.card, onSurface = w.text, surfaceVariant = w.surface, onSurfaceVariant = w.textDim,
-        outline = w.stroke, outlineVariant = w.stroke, error = w.danger,
-        surfaceContainer = w.card, surfaceContainerHigh = w.card, surfaceContainerHighest = w.card, surfaceContainerLow = w.surface, surfaceContainerLowest = w.surface,
-        primaryContainer = w.selected, onPrimaryContainer = w.text, secondaryContainer = w.selected, onSecondaryContainer = w.text,
-        surfaceTint = Color.Transparent,
+        primary = c.accent, onPrimary = c.onAccent, background = c.bg, surface = c.surface, onSurface = c.text, onBackground = c.text,
+        surfaceVariant = c.card, onSurfaceVariant = c.text2, outline = c.stroke, error = c.danger,
     )
-    val typo = Typography(
-        bodyLarge = TextStyle(fontSize = 15.sp), bodyMedium = TextStyle(fontSize = 14.sp), bodySmall = TextStyle(fontSize = 12.sp),
-        titleLarge = TextStyle(fontSize = 20.sp), titleMedium = TextStyle(fontSize = 16.sp), titleSmall = TextStyle(fontSize = 14.sp),
-        labelLarge = TextStyle(fontSize = 14.sp), labelMedium = TextStyle(fontSize = 12.sp), labelSmall = TextStyle(fontSize = 11.sp),
-    )
-    CompositionLocalProvider(LocalWin provides w) {
-        MaterialTheme(colorScheme = scheme, typography = typo, content = content)
+    MaterialTheme(colorScheme = scheme) {
+        CompositionLocalProvider(LocalWin provides c, LocalDensity provides density) {
+            Box(Modifier.fillMaxSize().background(c.bg)) { content() }
+        }
     }
 }
 
-// ---------------------------------------------------------------------------------------- glyphs
+// ---------------------------------------------------------------------------------------------- icons & colours
+fun kindIcon(k: Kind): ImageVector = when (k) {
+    Kind.FOLDER -> Icons.Filled.Folder
+    Kind.IMAGE -> Icons.Filled.Image
+    Kind.VIDEO -> Icons.Filled.VideoFile
+    Kind.AUDIO -> Icons.Filled.AudioFile
+    Kind.DOCUMENT -> Icons.Filled.Description
+    Kind.SHEET -> Icons.Filled.TableChart
+    Kind.SLIDES -> Icons.Filled.Slideshow
+    Kind.PDF -> Icons.Filled.PictureAsPdf
+    Kind.TEXT -> Icons.Filled.TextSnippet
+    Kind.CODE -> Icons.Filled.Code
+    Kind.ARCHIVE -> Icons.Filled.Archive
+    Kind.APK -> Icons.Filled.Android
+    Kind.FONT -> Icons.Filled.FontDownload
+    Kind.DISK -> Icons.Filled.Storage
+    Kind.EBOOK -> Icons.Filled.Book
+    Kind.OTHER -> Icons.Filled.InsertDriveFile
+}
 
-fun kindColor(kind: Kind, ext: String = ""): Color = when (kind) {
+fun kindColor(k: Kind): Color = when (k) {
+    Kind.FOLDER -> Color(0xFFF7C948)
     Kind.IMAGE -> Color(0xFF1FA463)
-    Kind.VIDEO -> Color(0xFF8E4EC6)
-    Kind.AUDIO -> Color(0xFFF76B15)
-    Kind.DOC -> if (ext == "pdf") Color(0xFFE5484D) else Color(0xFF2F6FED)
-    Kind.TEXT -> Color(0xFF6E7781)
-    Kind.ARCHIVE -> Color(0xFFC99A00)
-    Kind.APK -> Color(0xFF2FB36B)
-    else -> Color(0xFF8B949E)
+    Kind.VIDEO -> Color(0xFF8E54E9)
+    Kind.AUDIO -> Color(0xFFF2711C)
+    Kind.DOCUMENT -> Color(0xFF2B6FDB)
+    Kind.SHEET -> Color(0xFF1E8E3E)
+    Kind.SLIDES -> Color(0xFFD9541E)
+    Kind.PDF -> Color(0xFFD93025)
+    Kind.TEXT -> Color(0xFF6B7684)
+    Kind.CODE -> Color(0xFF00897B)
+    Kind.ARCHIVE -> Color(0xFFB8860B)
+    Kind.APK -> Color(0xFF3DDC84)
+    Kind.FONT -> Color(0xFF7E57C2)
+    Kind.DISK -> Color(0xFF546E7A)
+    Kind.EBOOK -> Color(0xFF8D6E63)
+    Kind.OTHER -> Color(0xFF78909C)
 }
 
-fun kindIcon(kind: Kind, ext: String = ""): ImageVector = when (kind) {
-    Kind.IMAGE -> Icons.Outlined.Image
-    Kind.VIDEO -> Icons.Outlined.Videocam
-    Kind.AUDIO -> Icons.Outlined.MusicNote
-    Kind.DOC -> if (ext == "pdf") Icons.Outlined.PictureAsPdf else Icons.Outlined.Description
-    Kind.TEXT -> Icons.Outlined.Code
-    Kind.ARCHIVE -> Icons.Outlined.FolderZip
-    Kind.APK -> Icons.Outlined.Android
-    else -> Icons.Outlined.InsertDriveFile
-}
-
-/** Yellow Windows-style folder. */
+/** Windows-style yellow folder. */
 @Composable
 fun FolderGlyph(size: Dp, modifier: Modifier = Modifier) {
     Canvas(modifier.size(size)) {
-        val w = this.size.width; val h = this.size.height
-        val r = CornerRadius(w * 0.09f)
-        val back = Color(0xFFE8A91E)
-        drawRoundRect(back, Offset(w * 0.05f, h * 0.15f), Size(w * 0.42f, h * 0.24f), r)
-        drawRoundRect(back, Offset(w * 0.05f, h * 0.25f), Size(w * 0.90f, h * 0.62f), r)
-        drawRoundRect(
-            Brush.verticalGradient(listOf(Color(0xFFFFDE7A), Color(0xFFFFC73D)), startY = h * 0.34f, endY = h * 0.88f),
-            Offset(w * 0.05f, h * 0.34f), Size(w * 0.90f, h * 0.53f), r
-        )
+        val w = this.size.width
+        val h = this.size.height
+        val back = Brush.verticalGradient(listOf(Color(0xFFE5A92A), Color(0xFFD99A1B)))
+        val front = Brush.verticalGradient(listOf(Color(0xFFFFE08A), Color(0xFFFFC53D)))
+        // back panel with tab
+        drawRoundRect(back, topLeft = Offset(w * 0.06f, h * 0.17f), size = Size(w * 0.40f, h * 0.30f), cornerRadius = CornerRadius(w * 0.07f))
+        drawRoundRect(back, topLeft = Offset(w * 0.06f, h * 0.27f), size = Size(w * 0.88f, h * 0.55f), cornerRadius = CornerRadius(w * 0.08f))
+        // front panel
+        drawRoundRect(front, topLeft = Offset(w * 0.06f, h * 0.38f), size = Size(w * 0.88f, h * 0.46f), cornerRadius = CornerRadius(w * 0.08f))
     }
 }
 
-/** A document page with a folded corner and a kind icon. */
+/** Colourful rounded tile with the kind icon (used when there is no thumbnail). */
 @Composable
-fun FileGlyph(kind: Kind, ext: String, size: Dp, modifier: Modifier = Modifier) {
-    val col = kindColor(kind, ext)
-    val dark = Win.c.dark
-    Box(modifier.size(size), contentAlignment = Alignment.Center) {
-        Canvas(Modifier.size(size)) {
-            val w = this.size.width; val h = this.size.height
-            val l = w * 0.17f; val rgt = w * 0.83f; val t = h * 0.05f; val b = h * 0.95f; val fold = w * 0.22f
-            val page = Path().apply {
-                moveTo(l, t); lineTo(rgt - fold, t); lineTo(rgt, t + fold); lineTo(rgt, b); lineTo(l, b); close()
-            }
-            drawPath(page, if (dark) Color(0xFFE6E6E6) else Color(0xFFFFFFFF))
-            drawPath(page, col.copy(alpha = 0.55f), style = androidx.compose.ui.graphics.drawscope.Stroke(width = w * 0.045f))
-            val corner = Path().apply { moveTo(rgt - fold, t); lineTo(rgt - fold, t + fold); lineTo(rgt, t + fold); close() }
-            drawPath(corner, col.copy(alpha = 0.35f))
-        }
-        Icon(kindIcon(kind, ext), null, tint = col, modifier = Modifier.size(size * 0.46f))
+fun FileGlyph(kind: Kind, size: Dp, modifier: Modifier = Modifier) {
+    if (kind == Kind.FOLDER) { FolderGlyph(size, modifier); return }
+    val col = kindColor(kind)
+    Box(modifier.size(size).clip(RoundedCornerShape(size * 0.2f)).background(col.copy(alpha = 0.16f)), contentAlignment = Alignment.Center) {
+        Icon(kindIcon(kind), null, tint = col, modifier = Modifier.size(size * 0.62f))
     }
 }
 
-/** The app logo (same artwork as the launcher icon). */
+/** App mark used on the welcome screen and in the sidebar header. */
 @Composable
 fun AppLogo(size: Dp, modifier: Modifier = Modifier) {
-    Canvas(modifier.size(size)) {
-        val w = this.size.width; val h = this.size.height
-        drawRoundRect(Brush.linearGradient(listOf(Color(0xFF2F80FF), Color(0xFF0B3FA8))), cornerRadius = CornerRadius(w * 0.26f))
-        val s = w / 108f
-        fun r(x: Float, y: Float, rw: Float, rh: Float, c: Color, rad: Float = 4f) = drawRoundRect(c, Offset(x * s, y * s), Size(rw * s, rh * s), CornerRadius(rad * s))
-        r(27f, 33f, 54f, 44f, Color(0xFFE39A1B))
-        r(27f, 46f, 54f, 31f, Color(0xFFFFC83D))
-        val p = Color(0xF2FFFFFF)
-        r(42f, 51f, 11f, 10f, p, 1f); r(55f, 51f, 11f, 10f, p, 1f); r(42f, 63f, 11f, 10f, p, 1f); r(55f, 63f, 11f, 10f, p, 1f)
-    }
+    Box(
+        modifier.size(size).clip(RoundedCornerShape(size * 0.24f))
+            .background(Brush.linearGradient(listOf(Color(0xFF1E88FF), Color(0xFF0A3FAE)))),
+        contentAlignment = Alignment.Center
+    ) { FolderGlyph(size * 0.74f) }
 }

@@ -1,108 +1,87 @@
 package com.lumen.explorer
 
-import android.content.Context
-import android.os.Environment
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import java.io.File
 
-/** All user preferences. Compose-observable; persisted by [save]. */
+data class Prefs(
+    val theme: String = "system",            // system | light | dark
+    val accent: Int = 0,
+    val textScale: Float = 1f,
+    val uiScale: Float = 1f,
+    val viewMode: ViewMode = ViewMode.DETAILS,
+    val sortBy: SortBy = SortBy.NAME,
+    val sortAsc: Boolean = true,
+    val groupBy: GroupBy = GroupBy.NONE,
+    val foldersFirst: Boolean = true,
+    val showHidden: Boolean = false,
+    val showExt: Boolean = true,
+    val checkboxes: Boolean = false,
+    val thumbnails: Boolean = true,
+    val compact: Boolean = false,
+    val useBin: Boolean = true,
+    val confirmDelete: Boolean = true,
+    val binDays: Int = 30,
+    val welcomed: Boolean = false,
+    val pinned: List<String> = emptyList(),
+    val favorites: List<String> = emptyList(),
+    val recentSearches: List<String> = emptyList(),
+    val safTrees: List<String> = emptyList(),   // "uri\u0002title"
+)
+
 object Settings {
-    // Appearance
-    var theme by mutableStateOf("system")           // system | light | dark   (default = follow system)
-    var accent by mutableIntStateOf(0)              // index into Palette accents
-    var textScale by mutableFloatStateOf(1.0f)      // 0.8 – 2.0  (text size of everything)
-    var uiScale by mutableFloatStateOf(1.0f)        // 0.8 – 1.6  (size of buttons/icons/spacing)
-    var compact by mutableStateOf(false)            // tighter rows (Windows "compact view")
+    var s by mutableStateOf(Prefs())
+        private set
 
-    // Browsing
-    var viewMode by mutableStateOf(ViewMode.DETAILS)
-    var sortBy by mutableStateOf(SortBy.NAME)
-    var sortAsc by mutableStateOf(true)
-    var groupBy by mutableStateOf(GroupBy.NONE)
-    var groupAsc by mutableStateOf(true)
-    var foldersFirst by mutableStateOf(true)
-    var showHidden by mutableStateOf(false)
-    var showExt by mutableStateOf(true)
-    var checkboxes by mutableStateOf(false)
-    var detailsPane by mutableStateOf(false)
-    var thumbnails by mutableStateOf(true)
-
-    // Safety
-    var useBin by mutableStateOf(true)
-    var confirmDelete by mutableStateOf(true)
-    var binDays by mutableIntStateOf(30)
-
-    // Lists
-    var pinned by mutableStateOf<List<String>>(emptyList())
-    var favorites by mutableStateOf<List<String>>(emptyList())
-    var recentSearches by mutableStateOf<List<String>>(emptyList())
-    var openTabs by mutableStateOf<List<String>>(emptyList())
-
-    private fun join(l: List<String>) = l.joinToString("\n")
-    private fun split(s: String) = if (s.isEmpty()) emptyList() else s.split('\n')
-
-    fun load(ctx: Context) {
-        PrefsStore.init(ctx)
-        val p = PrefsStore
-        theme = p.str("theme", "system")
-        accent = p.int("accent", 0)
-        textScale = p.float("textScale", 1.0f)
-        uiScale = p.float("uiScale", 1.0f)
-        compact = p.bool("compact", false)
-        viewMode = runCatching { ViewMode.valueOf(p.str("viewMode", "DETAILS")) }.getOrDefault(ViewMode.DETAILS)
-        sortBy = runCatching { SortBy.valueOf(p.str("sortBy", "NAME")) }.getOrDefault(SortBy.NAME)
-        sortAsc = p.bool("sortAsc", true)
-        groupBy = runCatching { GroupBy.valueOf(p.str("groupBy", "NONE")) }.getOrDefault(GroupBy.NONE)
-        groupAsc = p.bool("groupAsc", true)
-        foldersFirst = p.bool("foldersFirst", true)
-        showHidden = p.bool("showHidden", false)
-        showExt = p.bool("showExt", true)
-        checkboxes = p.bool("checkboxes", false)
-        detailsPane = p.bool("detailsPane", false)
-        thumbnails = p.bool("thumbnails", true)
-        useBin = p.bool("useBin", true)
-        confirmDelete = p.bool("confirmDelete", true)
-        binDays = p.int("binDays", 30)
-        pinned = if (p.has("pinned")) split(p.str("pinned", "")) else defaultPinned()
-        favorites = split(p.str("favorites", ""))
-        recentSearches = split(p.str("recentSearches", ""))
-        openTabs = split(p.str("openTabs", ""))
-        if (!p.has("pinned")) save()
-    }
-
-    private fun defaultPinned(): List<String> {
-        val root = Environment.getExternalStorageDirectory()
-        return listOf(
-            Environment.DIRECTORY_DOWNLOADS, Environment.DIRECTORY_DCIM, Environment.DIRECTORY_PICTURES,
-            Environment.DIRECTORY_DOCUMENTS, Environment.DIRECTORY_MOVIES, Environment.DIRECTORY_MUSIC,
-        ).map { File(root, it).absolutePath }.filter { File(it).isDirectory }
-    }
-
-    fun save() {
-        PrefsStore.putAll(
-            "theme" to theme, "accent" to accent, "textScale" to textScale, "uiScale" to uiScale, "compact" to compact,
-            "viewMode" to viewMode.name, "sortBy" to sortBy.name, "sortAsc" to sortAsc,
-            "groupBy" to groupBy.name, "groupAsc" to groupAsc, "foldersFirst" to foldersFirst,
-            "showHidden" to showHidden, "showExt" to showExt, "checkboxes" to checkboxes, "detailsPane" to detailsPane,
-            "thumbnails" to thumbnails, "useBin" to useBin, "confirmDelete" to confirmDelete, "binDays" to binDays,
-            "pinned" to join(pinned), "favorites" to join(favorites), "recentSearches" to join(recentSearches),
-            "openTabs" to join(openTabs),
+    fun load() {
+        val d = Prefs()
+        s = Prefs(
+            theme = PrefsStore.str("theme", d.theme),
+            accent = PrefsStore.int("accent", d.accent),
+            textScale = PrefsStore.float("textScale", d.textScale),
+            uiScale = PrefsStore.float("uiScale", d.uiScale),
+            viewMode = runCatching { ViewMode.valueOf(PrefsStore.str("viewMode", d.viewMode.name)) }.getOrDefault(d.viewMode),
+            sortBy = runCatching { SortBy.valueOf(PrefsStore.str("sortBy", d.sortBy.name)) }.getOrDefault(d.sortBy),
+            sortAsc = PrefsStore.bool("sortAsc", d.sortAsc),
+            groupBy = runCatching { GroupBy.valueOf(PrefsStore.str("groupBy", d.groupBy.name)) }.getOrDefault(d.groupBy),
+            foldersFirst = PrefsStore.bool("foldersFirst", d.foldersFirst),
+            showHidden = PrefsStore.bool("showHidden", d.showHidden),
+            showExt = PrefsStore.bool("showExt", d.showExt),
+            checkboxes = PrefsStore.bool("checkboxes", d.checkboxes),
+            thumbnails = PrefsStore.bool("thumbnails", d.thumbnails),
+            compact = PrefsStore.bool("compact", d.compact),
+            useBin = PrefsStore.bool("useBin", d.useBin),
+            confirmDelete = PrefsStore.bool("confirmDelete", d.confirmDelete),
+            binDays = PrefsStore.int("binDays", d.binDays),
+            welcomed = PrefsStore.bool("welcomed", d.welcomed),
+            pinned = PrefsStore.list("pinned"),
+            favorites = PrefsStore.list("favorites"),
+            recentSearches = PrefsStore.list("recentSearches"),
+            safTrees = PrefsStore.list("safTrees"),
         )
     }
 
-    inline fun update(block: Settings.() -> Unit) { block(); save() }
-
-    fun isPinned(path: String) = path in pinned
-    fun togglePinned(path: String) { pinned = if (path in pinned) pinned - path else pinned + path; save() }
-    fun isFavorite(path: String) = path in favorites
-    fun toggleFavorite(path: String) { favorites = if (path in favorites) favorites - path else favorites + path; save() }
-    fun addSearch(q: String) {
-        val t = q.trim(); if (t.isEmpty()) return
-        recentSearches = (listOf(t) + recentSearches.filter { it != t }).take(12); save()
+    fun update(block: Prefs.() -> Prefs) {
+        val n = s.block()
+        s = n
+        PrefsStore.edit {
+            putString("theme", n.theme); putInt("accent", n.accent)
+            putFloat("textScale", n.textScale); putFloat("uiScale", n.uiScale)
+            putString("viewMode", n.viewMode.name); putString("sortBy", n.sortBy.name); putBoolean("sortAsc", n.sortAsc)
+            putString("groupBy", n.groupBy.name); putBoolean("foldersFirst", n.foldersFirst)
+            putBoolean("showHidden", n.showHidden); putBoolean("showExt", n.showExt); putBoolean("checkboxes", n.checkboxes)
+            putBoolean("thumbnails", n.thumbnails); putBoolean("compact", n.compact)
+            putBoolean("useBin", n.useBin); putBoolean("confirmDelete", n.confirmDelete); putInt("binDays", n.binDays)
+            putBoolean("welcomed", n.welcomed)
+            PrefsStore.putList(this, "pinned", n.pinned); PrefsStore.putList(this, "favorites", n.favorites)
+            PrefsStore.putList(this, "recentSearches", n.recentSearches); PrefsStore.putList(this, "safTrees", n.safTrees)
+        }
     }
-    fun resetAppearance() { theme = "system"; accent = 0; textScale = 1f; uiScale = 1f; compact = false; save() }
+
+    fun toggleFavorite(path: String) = update { copy(favorites = if (path in favorites) favorites - path else favorites + path) }
+    fun togglePinned(path: String) = update { copy(pinned = if (path in pinned) pinned - path else pinned + path) }
+    fun addRecentSearch(q: String) {
+        val t = q.trim(); if (t.isEmpty()) return
+        update { copy(recentSearches = (listOf(t) + recentSearches.filter { it != t }).take(12)) }
+    }
 }

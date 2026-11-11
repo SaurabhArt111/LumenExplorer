@@ -1,30 +1,41 @@
-# Lumen Explorer
+# Lumen Explorer (v1.1)
 
-A native Android file manager styled after Windows 11 File Explorer. Fully offline (no INTERNET permission), no login, no vault.
+A native Android file manager (Kotlin + Jetpack Compose) with a Windows‑11 look: tabs, address bar, command bar,
+details pane, drag‑select, zip / unzip, recycle bin, storage analyzer, duplicate finder and the SecureVault web app built in.
+Fully offline — the app declares **no INTERNET permission**.
 
 ## Build
-- Android Studio (Koala+) → Open this folder → Run, **or** `./gradlew assembleDebug` (JDK 17, Android SDK 34).
-- Needs a one-time Gradle sync with network to fetch dependencies; the built app itself never uses the network.
-- minSdk 26, target/compile 34. Package `com.lumen.explorer`.
+1. Open this folder in **Android Studio Koala (2024.1) or newer** (JDK 17, Android SDK 34).
+2. Let Gradle sync (needs internet once, to download dependencies), then **Run ▶** on a device, or
+   `./gradlew assembleDebug` → `app/build/outputs/apk/debug/app-debug.apk`.
+3. First launch: **Get started → Allow everything → Start**.
 
-## Features
-- Real device files: internal storage, SD cards / USB OTG, Recycle Bin, Downloads, DCIM etc.
-- Windows-style UI: tabs, back/forward/up, editable breadcrumb address bar, search (`ext:`, `kind:`, `size>`, wildcards), command bar, sidebar (drawer on phones), details pane, status bar.
-- View modes: Extra large / Large / Medium / Small icons, List, Details, Tiles, Content; sort, group, filter; checkboxes.
-- Bottom sheets (menus, context menu, actions), top sheet (quick settings: pull down on the tab strip).
-- Copy / cut / paste with conflict choices, rename, delete (Recycle Bin + Undo), properties, hashes, share, open with.
-- Compress / extract: ZIP, AES-256 ZIP (password), 7z, TAR, TAR.GZ; extract also TAR.BZ2/XZ, GZ.
-- Gallery, Recent, Favorites, Quick access, categories, Storage analyzer, Large files, Duplicate finder.
-- Viewers: images (zoom/rotate, HEIC/HEIF/AVIF), video/audio, PDF, text editor.
-- Theme: System default (default) / Light / Dark, 8 accents, text size and interface size sliders.
-- Hardware keyboard shortcuts (Ctrl+C/X/V/A/T/W/F/L, Del, F2, F5, Alt+←/→).
-- Wide file-type support incl. Apple (HEIC, MOV, M4A, CAF, AIFF, Pages/Numbers/Key, DMG/IPA recognized).
+## What changed in v1.1
+* **First‑run flow** – Welcome → permission page (All files, Photos/videos/audio, Install apps, Notifications, each with its own
+  Allow button and an “Allow everything” shortcut) → **Start**. Re‑run any time from Settings → Storage → “Run setup again”.
+* **Counts fixed** – folder item counts on Home/lists are recomputed as soon as permissions are granted and whenever storage
+  changes, instead of being computed once (that was the cause of “0 items”).
+* **Categories fixed** – Images, Videos, Audio, Documents, APKs, Archives… are built from a real walk of the file tree
+  (skipping `Android/data`, `Android/obb`, dot‑folders and the bin), so APKs and other files now show up.
+  Without All‑files access it falls back to MediaStore.
+* **No more video loop** – an external player is launched only by an explicit tap (with a 2.5 s guard); returning from VLC etc.
+  never re‑launches it. Formats the built‑in player can't handle (mov, avi, hevc…) open externally once.
+* **Smooth scrolling** – lazy grids/lists with stable keys, synchronous row building, thumbnails decoded off‑thread
+  (3 at a time, down‑sampled, LRU‑cached, short delay so fast fling doesn't start decodes).
+* **Storage list** – only storage that is really mounted is shown (no SD card ⇒ no SD entry). USB drives appear automatically;
+  phones/tablets over USB (MTP) are linked once through the system folder picker and then browsable (copy to/from phone).
+* **SecureVault** – the web version is inside the app (Sidebar → More → SecureVault). It runs on a private
+  `appassets` origin, can't reach the network, and file “downloads” are saved to `Downloads/SecureVault`.
+  `SecureVault.html` itself also got a rebuilt dock (tap the round button to open/close, drag the handle, auto‑hide option).
+* **Sheets** – bottom and top sheets can be dragged all the way to the top/bottom even with little content;
+  drag toward their own edge to shrink, then dismiss.
 
-## Permissions
-All-files access (Android 11+), legacy storage permissions (older), media read, install packages (to open APKs). A "Continue with limited access" option exists.
-
-## Known limitations
-- RAR cannot be extracted (hands off to another app). DMG/IPA/Pages etc. are recognized and opened externally.
-- Android 11+ blocks `/Android/data` and `/Android/obb` for all third-party apps.
-- GIFs show as static in the viewer; video/audio codec support depends on the device.
-- Not compiled in the authoring environment: if Gradle reports an unknown Material icon name, replace it with a nearby one.
+## Known limits
+* RAR can be listed/identified but **not extracted** (no free encoder/decoder bundled); ZIP, 7z, TAR, TAR.GZ/BZ2/XZ and
+  AES‑256 ZIP are supported.
+* Android 11+ blocks every third‑party app from `Android/data` and `Android/obb`.
+* MTP phones/tablets need the one‑time “Link” step (Android doesn't expose them as normal storage).
+* Video/audio codec support depends on the device; unsupported files show an “Open in another app” button.
+* This project was assembled without access to an Android build environment: the file/archive logic was compiled and unit‑tested
+  on a JVM, but the Compose UI has not been compiled yet. If Android Studio reports a compile error on first sync, it is most
+  likely a small signature/import mismatch — please send the error text and it can be fixed quickly.
