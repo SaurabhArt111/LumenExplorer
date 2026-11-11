@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Amber folder whose front carries a 2x2 "window pane" grid. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+    <!-- folder back + tab -->
+    <path
+        android:fillColor="#FFE39A1B"
+        android:pathData="M31,33 h14 l5,6 h27 a4,4 0 0 1 4,4 v30 a4,4 0 0 1 -4,4 h-46 a4,4 0 0 1 -4,-4 v-36 a4,4 0 0 1 4,-4 z" />
+    <!-- folder front -->
+    <path
+        android:fillColor="#FFFFC83D"
+        android:pathData="M27,46 h54 v27 a4,4 0 0 1 -4,4 h-46 a4,4 0 0 1 -4,-4 z" />
+    <!-- window panes -->
+    <path android:fillColor="#F2FFFFFF" android:pathData="M42,51 h11 v10 h-11 z" />
+    <path android:fillColor="#F2FFFFFF" android:pathData="M55,51 h11 v10 h-11 z" />
+    <path android:fillColor="#F2FFFFFF" android:pathData="M42,63 h11 v10 h-11 z" />
+    <path android:fillColor="#F2FFFFFF" android:pathData="M55,63 h11 v10 h-11 z" />
+</vector>
