@@ -2067,493 +2067,142 @@
        DOCK v2 — floating dock on desktop, bottom app-tray on phones
        (lives directly under <body>, above windows, below modals)
     ══════════════════════════════════════════════ */
-    :root {
-      --dock-z: 8600;
-      --dock-icon: 44px;
-    }
+    :root { --dock-z: 8600; --dock-icon: 44px; }
 
-    #dock-scrim {
-      position: fixed;
-      inset: 0;
-      z-index: 8590;
-      background: rgba(0, 0, 0, .45);
-      opacity: 0;
-      pointer-events: none;
-      transition: opacity .22s;
-      display: none;
-    }
+    #dock-scrim { position: fixed; inset: 0; z-index: 8590; background: rgba(0,0,0,.45); opacity: 0; pointer-events: none; transition: opacity .22s; display: none; }
 
     #taskbar-wrapper {
-      position: fixed;
-      left: 50%;
-      bottom: calc(10px + env(safe-area-inset-bottom, 0px));
-      transform: translateX(-50%);
-      z-index: var(--dock-z);
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      pointer-events: none;
-      max-width: calc(100vw - 24px);
-      transition: transform .3s cubic-bezier(.2, .9, .3, 1), opacity .2s;
+      position: fixed; left: 50%; bottom: calc(10px + env(safe-area-inset-bottom, 0px));
+      transform: translateX(-50%); z-index: var(--dock-z);
+      display: flex; flex-direction: column; align-items: center;
+      pointer-events: none; max-width: calc(100vw - 24px);
+      transition: transform .3s cubic-bezier(.2,.9,.3,1), opacity .2s;
     }
-
     #taskbar {
-      pointer-events: all;
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      background: rgba(22, 23, 36, .88);
-      -webkit-backdrop-filter: blur(26px) saturate(180%);
-      backdrop-filter: blur(26px) saturate(180%);
-      border: 1px solid rgba(255, 255, 255, .13);
-      border-radius: 20px;
-      padding: 6px 12px;
-      box-shadow: 0 12px 44px rgba(0, 0, 0, .6), 0 1px 0 rgba(255, 255, 255, .06) inset;
+      pointer-events: all; display: flex; align-items: center; gap: 6px;
+      background: rgba(22,23,36,.88);
+      -webkit-backdrop-filter: blur(26px) saturate(180%); backdrop-filter: blur(26px) saturate(180%);
+      border: 1px solid rgba(255,255,255,.13); border-radius: 20px; padding: 6px 12px;
+      box-shadow: 0 12px 44px rgba(0,0,0,.6), 0 1px 0 rgba(255,255,255,.06) inset;
       max-width: 100%;
     }
+    .dock-row { display: flex; align-items: center; gap: 6px; }
+    #tb-running { display: flex; align-items: center; gap: 6px; }
+    #tb-empty { display: none; }
+    .dock-head { display: none; }
+    #dock-edge { display: none; }
 
-    .dock-row {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-    }
-
-    #tb-running {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-    }
-
-    #tb-empty {
-      display: none;
-    }
-
-    .dock-head {
-      display: none;
-    }
-
-    #dock-edge {
-      display: none;
-    }
-
-    .tb-sep {
-      width: 1px;
-      height: calc(var(--dock-icon) - 6px);
-      background: rgba(255, 255, 255, .14);
-      flex-shrink: 0;
-      margin: 0 3px;
-    }
-
-    .tb-sep.tb-sep-end {
-      display: none;
-    }
-
-    body.has-windows .tb-sep.tb-sep-end {
-      display: block;
-    }
+    .tb-sep { width: 1px; height: calc(var(--dock-icon) - 6px); background: rgba(255,255,255,.14); flex-shrink: 0; margin: 0 3px; }
+    .tb-sep.tb-sep-end { display: none; }
+    body.has-windows .tb-sep.tb-sep-end { display: block; }
 
     .tb-app {
-      position: relative;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      gap: 3px;
-      flex-shrink: 0;
-      cursor: pointer;
-      user-select: none;
-      -webkit-tap-highlight-color: transparent;
-      background: none;
-      border: 0;
-      padding: 0;
-      color: inherit;
-      font: inherit;
-      transition: transform .14s cubic-bezier(.34, 1.56, .64, 1);
+      position: relative; display: flex; flex-direction: column; align-items: center; gap: 3px;
+      flex-shrink: 0; cursor: pointer; user-select: none; -webkit-tap-highlight-color: transparent;
+      background: none; border: 0; padding: 0; color: inherit; font: inherit;
+      transition: transform .14s cubic-bezier(.34,1.56,.64,1);
     }
-
     .tb-app-icon {
-      width: var(--dock-icon);
-      height: var(--dock-icon);
-      border-radius: calc(var(--dock-icon) * .28);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      position: relative;
+      width: var(--dock-icon); height: var(--dock-icon); border-radius: calc(var(--dock-icon) * .28);
+      display: flex; align-items: center; justify-content: center; position: relative;
       transition: filter .15s, opacity .15s, box-shadow .15s;
     }
-
-    .tb-app-icon svg {
-      width: 56%;
-      height: 56%;
-    }
-
-    .tb-app.active .tb-app-icon {
-      box-shadow: 0 0 0 2px var(--accent);
-    }
-
-    .tb-app.pinned .tb-app-icon {
-      background: var(--surface3);
-    }
-
-    .tb-app.running:not(.pinned) .tb-app-icon {
-      background: var(--accent-dim);
-    }
-
-    .tb-app.minimized .tb-app-icon {
-      opacity: .55;
-    }
-
+    .tb-app-icon svg { width: 56%; height: 56%; }
+    .tb-app.active .tb-app-icon { box-shadow: 0 0 0 2px var(--accent); }
+    .tb-app.pinned .tb-app-icon { background: var(--surface3); }
+    .tb-app.running:not(.pinned) .tb-app-icon { background: var(--accent-dim); }
+    .tb-app.minimized .tb-app-icon { opacity: .55; }
     .tb-app-dot {
-      position: absolute;
-      bottom: -7px;
-      left: 50%;
-      transform: translateX(-50%) scale(.4);
-      width: 5px;
-      height: 5px;
-      border-radius: 50%;
-      background: var(--accent);
-      opacity: 0;
+      position: absolute; bottom: -7px; left: 50%; transform: translateX(-50%) scale(.4);
+      width: 5px; height: 5px; border-radius: 50%; background: var(--accent); opacity: 0;
       transition: opacity .2s, transform .2s;
     }
-
-    .tb-app.running .tb-app-dot,
-    .tb-app.pinned.running .tb-app-dot {
-      opacity: 1;
-      transform: translateX(-50%) scale(1);
-    }
-
-    .tb-app.minimized .tb-app-dot {
-      opacity: .45;
-    }
-
-    .tb-app-label {
-      display: none;
-      font-size: 11px;
-      color: var(--text2);
-      max-width: 72px;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-      text-align: center;
-      line-height: 1.2;
-    }
-
-    .tb-app.tb-tool .tb-app-icon {
-      background: rgba(255, 255, 255, .08);
-    }
-
-    .tb-app.tb-tool.on .tb-app-icon {
-      background: var(--accent-dim);
-    }
+    .tb-app.running .tb-app-dot, .tb-app.pinned.running .tb-app-dot { opacity: 1; transform: translateX(-50%) scale(1); }
+    .tb-app.minimized .tb-app-dot { opacity: .45; }
+    .tb-app-label { display: none; font-size: 11px; color: var(--text2); max-width: 72px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: center; line-height: 1.2; }
+    .tb-app.tb-tool .tb-app-icon { background: rgba(255,255,255,.08); }
+    .tb-app.tb-tool.on .tb-app-icon { background: var(--accent-dim); }
 
     .tb-app-close {
-      position: absolute;
-      top: -6px;
-      right: -6px;
-      width: 18px;
-      height: 18px;
-      border-radius: 50%;
-      border: 1.5px solid rgba(255, 255, 255, .28);
-      background: var(--danger);
-      color: #fff;
-      padding: 0;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      opacity: 0;
-      transform: scale(.7);
-      pointer-events: none;
-      transition: opacity .12s, transform .12s;
-      z-index: 5;
-      cursor: pointer;
+      position: absolute; top: -6px; right: -6px; width: 18px; height: 18px; border-radius: 50%;
+      border: 1.5px solid rgba(255,255,255,.28); background: var(--danger); color: #fff; padding: 0;
+      display: flex; align-items: center; justify-content: center;
+      opacity: 0; transform: scale(.7); pointer-events: none; transition: opacity .12s, transform .12s; z-index: 5; cursor: pointer;
     }
-
-    .tb-app-close svg {
-      width: 10px;
-      height: 10px;
-    }
+    .tb-app-close svg { width: 10px; height: 10px; }
 
     /* Floating button that opens the tray on phones */
     #tb-toggle-btn {
-      display: none;
-      position: fixed;
-      right: 14px;
-      bottom: calc(var(--status-h, 28px) + 56px + env(safe-area-inset-bottom, 0px));
-      width: 48px;
-      height: 48px;
-      border-radius: 16px;
-      z-index: var(--dock-z);
-      align-items: center;
-      justify-content: center;
-      cursor: pointer;
-      touch-action: none;
-      background: rgba(22, 23, 36, .9);
-      -webkit-backdrop-filter: blur(18px);
-      backdrop-filter: blur(18px);
-      border: 1px solid rgba(255, 255, 255, .16);
-      box-shadow: 0 8px 28px rgba(0, 0, 0, .55);
-      color: #fff;
+      display: none; position: fixed; right: 14px; bottom: calc(var(--status-h, 28px) + 56px + env(safe-area-inset-bottom, 0px));
+      width: 48px; height: 48px; border-radius: 16px; z-index: var(--dock-z);
+      align-items: center; justify-content: center; cursor: pointer; touch-action: none;
+      background: rgba(22,23,36,.9); -webkit-backdrop-filter: blur(18px); backdrop-filter: blur(18px);
+      border: 1px solid rgba(255,255,255,.16); box-shadow: 0 8px 28px rgba(0,0,0,.55); color: #fff;
       transition: opacity .18s, transform .18s;
     }
-
-    #tb-toggle-btn:active {
-      transform: scale(.94);
-    }
-
-    #tb-toggle-btn svg {
-      width: 22px;
-      height: 22px;
-      pointer-events: none;
-    }
-
-    #tb-toggle-btn.dragging {
-      transition: none;
-      opacity: .85;
-    }
-
+    #tb-toggle-btn:active { transform: scale(.94); }
+    #tb-toggle-btn svg { width: 22px; height: 22px; pointer-events: none; }
+    #tb-toggle-btn.dragging { transition: none; opacity: .85; }
     .tb-toggle-badge {
-      position: absolute;
-      top: -4px;
-      right: -4px;
-      min-width: 18px;
-      height: 18px;
-      padding: 0 4px;
-      border-radius: 9px;
-      background: var(--accent);
-      color: #fff;
-      font-size: 10px;
-      font-weight: 700;
-      display: none;
-      align-items: center;
-      justify-content: center;
-      border: 1.5px solid var(--bg);
-      pointer-events: none;
+      position: absolute; top: -4px; right: -4px; min-width: 18px; height: 18px; padding: 0 4px; border-radius: 9px;
+      background: var(--accent); color: #fff; font-size: 10px; font-weight: 700; display: none;
+      align-items: center; justify-content: center; border: 1.5px solid var(--bg); pointer-events: none;
     }
-
-    .tb-toggle-badge.on {
-      display: flex;
-    }
+    .tb-toggle-badge.on { display: flex; }
 
     /* ── Desktop ── */
     @media (min-width: 641px) {
-      body.dock-autohide #taskbar-wrapper:not(.peek) {
-        transform: translate(-50%, calc(100% + 14px));
-        opacity: 0;
-      }
-
-      body.dock-autohide #taskbar-wrapper:not(.peek) #taskbar {
-        pointer-events: none;
-      }
-
-      body.dock-autohide #dock-edge {
-        display: block;
-        position: fixed;
-        bottom: 0;
-        left: 30%;
-        width: 40%;
-        height: 10px;
-        z-index: var(--dock-z);
-      }
+      body.dock-autohide #taskbar-wrapper:not(.peek) { transform: translate(-50%, calc(100% + 14px)); opacity: 0; }
+      body.dock-autohide #taskbar-wrapper:not(.peek) #taskbar { pointer-events: none; }
+      body.dock-autohide #dock-edge { display: block; position: fixed; bottom: 0; left: 30%; width: 40%; height: 10px; z-index: var(--dock-z); }
     }
-
     @media (min-width: 641px) and (hover: hover) {
-      .tb-app:hover .tb-app-icon {
-        filter: brightness(1.12);
-      }
-
-      .tb-app.running:hover .tb-app-close {
-        opacity: 1;
-        transform: scale(1);
-        pointer-events: all;
-      }
-
+      .tb-app:hover .tb-app-icon { filter: brightness(1.12); }
+      .tb-app.running:hover .tb-app-close { opacity: 1; transform: scale(1); pointer-events: all; }
       .tb-app::before {
-        content: attr(data-label);
-        position: absolute;
-        bottom: 100%;
-        left: 50%;
-        transform: translateX(-50%);
-        background: rgba(20, 20, 36, .95);
-        color: #fff;
-        font-size: 11px;
-        padding: 4px 9px;
-        border-radius: 7px;
-        white-space: nowrap;
-        pointer-events: none;
-        opacity: 0;
-        margin-bottom: 12px;
-        transition: opacity .12s;
-        border: 1px solid rgba(255, 255, 255, .1);
+        content: attr(data-label); position: absolute; bottom: 100%; left: 50%; transform: translateX(-50%);
+        background: rgba(20,20,36,.95); color: #fff; font-size: 11px; padding: 4px 9px; border-radius: 7px;
+        white-space: nowrap; pointer-events: none; opacity: 0; margin-bottom: 12px; transition: opacity .12s;
+        border: 1px solid rgba(255,255,255,.1);
       }
-
-      .tb-app:hover::before {
-        opacity: 1;
-      }
+      .tb-app:hover::before { opacity: 1; }
     }
 
     /* ── Phone: tray slides up from the bottom ── */
     @media (max-width: 640px) {
-      #dock-scrim {
-        display: block;
-      }
-
-      body.dock-open #dock-scrim {
-        opacity: 1;
-        pointer-events: all;
-      }
-
-      #tb-toggle-btn {
-        display: flex;
-      }
-
-      body.dock-open #tb-toggle-btn {
-        opacity: 0;
-        pointer-events: none;
-      }
-
+      #dock-scrim { display: block; }
+      body.dock-open #dock-scrim { opacity: 1; pointer-events: all; }
+      #tb-toggle-btn { display: flex; }
+      body.dock-open #tb-toggle-btn { opacity: 0; pointer-events: none; }
       #taskbar-wrapper {
-        left: 0;
-        right: 0;
-        bottom: 0;
-        max-width: none;
-        transform: translateY(110%);
-        align-items: stretch;
+        left: 0; right: 0; bottom: 0; max-width: none; transform: translateY(110%); align-items: stretch;
       }
-
-      body.dock-open #taskbar-wrapper {
-        transform: none;
-      }
-
+      body.dock-open #taskbar-wrapper { transform: none; }
       #taskbar {
-        flex-direction: column;
-        align-items: stretch;
-        gap: 0;
-        border-radius: 22px 22px 0 0;
-        border-bottom: 0;
-        padding: 6px 0 calc(16px + env(safe-area-inset-bottom, 0px));
-        max-height: 60vh;
+        flex-direction: column; align-items: stretch; gap: 0; border-radius: 22px 22px 0 0; border-bottom: 0;
+        padding: 6px 0 calc(16px + env(safe-area-inset-bottom, 0px)); max-height: 60vh;
       }
-
-      .dock-head {
-        display: block;
-        touch-action: none;
-        padding: 4px 18px 10px;
-      }
-
-      .dock-grab {
-        display: block;
-        width: 40px;
-        height: 4px;
-        border-radius: 2px;
-        background: rgba(255, 255, 255, .28);
-        margin: 2px auto 10px;
-      }
-
-      .dock-head-row {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-      }
-
-      #dock-title {
-        font-size: 13px;
-        font-weight: 600;
-        color: var(--text);
-      }
-
-      .dock-link {
-        background: none;
-        border: 0;
-        color: var(--accent);
-        font-size: 13px;
-        font-weight: 600;
-        padding: 6px 4px;
-        cursor: pointer;
-        display: none;
-      }
-
-      body.has-windows .dock-link {
-        display: block;
-      }
-
-      .dock-row {
-        overflow-x: auto;
-        overflow-y: hidden;
-        gap: 14px;
-        padding: 8px 18px 4px;
-        -webkit-overflow-scrolling: touch;
-        scrollbar-width: none;
-        align-items: flex-start;
-      }
-
-      .dock-row::-webkit-scrollbar {
-        display: none;
-      }
-
-      :root {
-        --dock-icon: 54px;
-      }
-
-      .tb-app {
-        gap: 6px;
-      }
-
-      .tb-app-label {
-        display: block;
-      }
-
-      .tb-app-dot {
-        bottom: 20px;
-        display: none;
-      }
-
-      .tb-app-close {
-        opacity: 1;
-        transform: none;
-        pointer-events: all;
-        width: 22px;
-        height: 22px;
-        top: -7px;
-        right: -7px;
-      }
-
-      .tb-app-close svg {
-        width: 12px;
-        height: 12px;
-      }
-
-      #tb-running {
-        gap: 14px;
-      }
-
-      #tb-empty {
-        display: block;
-        font-size: 12px;
-        color: var(--text3);
-        align-self: center;
-        padding-left: 4px;
-        white-space: nowrap;
-      }
-
-      body.has-windows #tb-empty {
-        display: none;
-      }
-
-      .tb-sep {
-        height: 44px;
-        align-self: center;
-      }
-
-      .tb-tool {
-        display: none;
-      }
-
-      .dock-row .tb-sep.tb-sep-end:nth-last-child(2) {
-        display: none !important;
-      }
-
-      #app {
-        padding-bottom: 0;
-      }
+      .dock-head { display: block; touch-action: none; padding: 4px 18px 10px; }
+      .dock-grab { display: block; width: 40px; height: 4px; border-radius: 2px; background: rgba(255,255,255,.28); margin: 2px auto 10px; }
+      .dock-head-row { display: flex; align-items: center; justify-content: space-between; }
+      #dock-title { font-size: 13px; font-weight: 600; color: var(--text); }
+      .dock-link { background: none; border: 0; color: var(--accent); font-size: 13px; font-weight: 600; padding: 6px 4px; cursor: pointer; display: none; }
+      body.has-windows .dock-link { display: block; }
+      .dock-row { overflow-x: auto; overflow-y: hidden; gap: 14px; padding: 8px 18px 4px; -webkit-overflow-scrolling: touch; scrollbar-width: none; align-items: flex-start; }
+      .dock-row::-webkit-scrollbar { display: none; }
+      :root { --dock-icon: 54px; }
+      .tb-app { gap: 6px; }
+      .tb-app-label { display: block; }
+      .tb-app-dot { bottom: 20px; display: none; }
+      .tb-app-close { opacity: 1; transform: none; pointer-events: all; width: 22px; height: 22px; top: -7px; right: -7px; }
+      .tb-app-close svg { width: 12px; height: 12px; }
+      #tb-running { gap: 14px; }
+      #tb-empty { display: block; font-size: 12px; color: var(--text3); align-self: center; padding-left: 4px; white-space: nowrap; }
+      body.has-windows #tb-empty { display: none; }
+      .tb-sep { height: 44px; align-self: center; }
+      .tb-tool { display: none; }
+      .dock-row .tb-sep.tb-sep-end:nth-last-child(2) { display: none !important; }
+      #app { padding-bottom: 0; }
     }
 
     /* ── PROGRESS ── */
@@ -4495,18 +4144,12 @@
     <div id="taskbar">
       <div class="dock-head" id="dock-head">
         <span class="dock-grab"></span>
-        <div class="dock-head-row"><span id="dock-title">Apps</span><button class="dock-link" id="tb-closeall"
-            type="button">Close all</button></div>
+        <div class="dock-head-row"><span id="dock-title">Apps</span><button class="dock-link" id="tb-closeall" type="button">Close all</button></div>
       </div>
       <div class="dock-row">
-        <div class="tb-app pinned running active" data-label="Files" id="tb-files" title="File Explorer" role="button"
-          tabindex="0">
+        <div class="tb-app pinned running active" data-label="Files" id="tb-files" title="File Explorer" role="button" tabindex="0">
           <div class="tb-app-icon" style="background:linear-gradient(135deg,#3b82f6,#6366f1)">
-            <svg viewBox="0 0 24 24" fill="none">
-              <path
-                d="M3 7C3 5.9 3.9 5 5 5H10L12 7H19C20.1 7 21 7.9 21 9V17C21 18.1 20.1 19 19 19H5C3.9 19 3 18.1 3 17V7Z"
-                fill="rgba(255,255,255,.92)" />
-            </svg>
+            <svg viewBox="0 0 24 24" fill="none"><path d="M3 7C3 5.9 3.9 5 5 5H10L12 7H19C20.1 7 21 7.9 21 9V17C21 18.1 20.1 19 19 19H5C3.9 19 3 18.1 3 17V7Z" fill="rgba(255,255,255,.92)" /></svg>
           </div>
           <div class="tb-app-dot"></div>
           <span class="tb-app-label">Files</span>
@@ -4515,13 +4158,8 @@
         <div id="tb-running"></div>
         <div id="tb-empty">Opened files and apps appear here</div>
         <div class="tb-sep tb-sep-end"></div>
-        <button class="tb-app tb-tool" id="tb-autohide" data-label="Auto-hide dock" title="Auto-hide dock" type="button"
-          aria-pressed="false">
-          <div class="tb-app-icon"><svg viewBox="0 0 24 24" fill="none">
-              <rect x="3" y="14" width="18" height="5" rx="2.5" fill="rgba(255,255,255,.8)" />
-              <path d="M8 9l4 4 4-4" stroke="rgba(255,255,255,.8)" stroke-width="1.8" stroke-linecap="round"
-                stroke-linejoin="round" />
-            </svg></div>
+        <button class="tb-app tb-tool" id="tb-autohide" data-label="Auto-hide dock" title="Auto-hide dock" type="button" aria-pressed="false">
+          <div class="tb-app-icon"><svg viewBox="0 0 24 24" fill="none"><rect x="3" y="14" width="18" height="5" rx="2.5" fill="rgba(255,255,255,.8)"/><path d="M8 9l4 4 4-4" stroke="rgba(255,255,255,.8)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
         </button>
       </div>
     </div>

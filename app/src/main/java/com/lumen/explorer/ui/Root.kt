@@ -50,6 +50,9 @@ import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.isAltPressed
 import androidx.compose.ui.input.key.isCtrlPressed
 import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.utf16CodePoint
+import androidx.compose.ui.input.key.isMetaPressed
+import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.pointerInput
@@ -76,19 +79,21 @@ fun LumenRoot() {
     LumenTheme {
         val dark = isDarkTheme()
         val view = LocalView.current
+        val vault = AppState.tab.loc === Loc.WebVault
         SideEffect {
             val w = (view.context as? android.app.Activity)?.window ?: return@SideEffect
-            WindowCompat.getInsetsController(w, view).apply { isAppearanceLightStatusBars = !dark; isAppearanceLightNavigationBars = !dark }
+            WindowCompat.getInsetsController(w, view).apply { isAppearanceLightStatusBars = !dark && !vault; isAppearanceLightNavigationBars = !dark && !vault }
         }
         BoxWithConstraints(Modifier.fillMaxSize()) {
             val wide = maxWidth >= 840.dp
-            CompositionLocalProvider(LocalWide provides wide) { RootContent(wide) }
+            val strip = maxWidth >= 600.dp          // tablets (even portrait) get the Chrome-style strip, phones the tab switcher
+            CompositionLocalProvider(LocalWide provides wide) { RootContent(wide, strip) }
         }
     }
 }
 
 @Composable
-private fun RootContent(wide: Boolean) {
+private fun RootContent(wide: Boolean, strip: Boolean) {
     val c = Win.c
     val ctx = LocalContext.current
     val tab = AppState.tab
@@ -97,7 +102,10 @@ private fun RootContent(wide: Boolean) {
     val scope = rememberCoroutineScope()
     val focus = remember { FocusRequester() }
     @Suppress("UNUSED_VARIABLE") val permTick = Perms.tick
-    LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
+    // keep the keyboard focus on the root unless a text field / dialog took it; re-claim it when overlays close
+    val overlayOpen = AppState.dialog != null || Sheets.current != null || AppState.showTopSheet || AppState.showTabs || CtxMenu.state != null ||
+        AppState.viewer != null || AppState.showSettings || AppState.searching
+    LaunchedEffect(overlayOpen, loc, AppState.active, tab.selection, tab.cursor) { if (!overlayOpen) runCatching { focus.requestFocus() } }
 
     val drawerOpen = drawer.currentValue == DrawerValue.Open
     BackHandler(enabled = drawerOpen || tab.selection.isNotEmpty() || AppState.searching || tab.canBack || loc !== Loc.Home || AppState.tabs.size > 1) {
@@ -113,8 +121,8 @@ private fun RootContent(wide: Boolean) {
 
     val main: @Composable (onMenu: () -> Unit) -> Unit = { onMenu ->
         Column(Modifier.fillMaxSize()) {
-            TabStrip()
-            NavRow(onMenu)
+            if (strip) TabStrip()
+            NavRow(onMenu, showTabButton = !strip)
             HDivider()
             CommandBar()
             HDivider()
@@ -153,12 +161,21 @@ private fun RootContent(wide: Boolean) {
             ) { main { scope.launch { drawer.open() } } }
         }
 
+        if (loc === Loc.WebVault) {
+            // SecureVault runs full screen: just a slim top tab with the title and a close button
+            Column(Modifier.fillMaxSize().background(Color(0xFF0B0F17)).statusBarsPadding().navigationBarsPadding().blockTouches()) {
+                VaultTopTab()
+                Box(Modifier.weight(1f).fillMaxWidth()) { key(tab.id) { WebVaultScreen() } }
+            }
+        }
         if (AppState.showSettings) Box(Modifier.fillMaxSize().blockTouches()) { SettingsScreen() }
         if (AppState.viewer != null) Box(Modifier.fillMaxSize().blockTouches()) { ViewerHost() }
         if (!Settings.s.welcomed || AppState.showWelcome) Box(Modifier.fillMaxSize().blockTouches()) { WelcomeScreen() }
+        TabSwitcherHost()
         TopSheetHost()
         SheetHost()
         DialogHost()
+        ContextMenuHost()
         ToastHost(Modifier.align(Alignment.BottomCenter).navigationBarsPadding())
     }
 }
@@ -178,7 +195,7 @@ private fun Content(loc: Loc) {
         Loc.Large -> LargeFilesScreen()
         Loc.Dupes -> DuplicatesScreen()
         Loc.Bin -> BinScreen()
-        Loc.WebVault -> key(tab.id) { WebVaultScreen() }
+        Loc.WebVault -> Box(Modifier.fillMaxSize())      // drawn full screen by RootContent
         is Loc.Saf -> key(tab.id, loc) { SafScreen(loc) }
         else -> FileBrowser()
     }
@@ -229,7 +246,7 @@ private fun ToastHost(modifier: Modifier = Modifier) {
         delay(if (t.action != null) 6500 else 3500)
         if (AppState.toast?.id == t.id) AppState.toast = null
     }
-    val shape = RoundedCornerShape(10.dp)
+    val shape = RoundedCornerShape(14.dp)
     Row(
         modifier.padding(horizontal = 16.dp, vertical = 16.dp).shadow(8.dp, shape).clip(shape).background(if (c.dark) Color(0xFF3A3A3A) else Color(0xFF2B2B2B))
             .padding(start = 16.dp, end = if (t.action != null) 6.dp else 16.dp, top = 4.dp, bottom = 4.dp),
@@ -245,27 +262,101 @@ private fun ToastHost(modifier: Modifier = Modifier) {
 }
 
 // ---------------------------------------------------------------------------------------------- hardware keyboard shortcuts
+private fun anyOverlay(): Boolean = AppState.dialog != null || Sheets.current != null || AppState.showTopSheet || AppState.showTabs ||
+    CtxMenu.state != null || AppState.viewer != null || AppState.showSettings || !Settings.s.welcomed || AppState.showWelcome
+
+/**
+ * Explorer-style shortcuts for tablet keyboards and mice. The root Box gets key events last (bubbling), so text fields,
+ * dialogs and the media viewer see their keys first.
+ */
 private fun handleKey(e: androidx.compose.ui.input.key.KeyEvent): Boolean {
     if (e.type != KeyEventType.KeyDown) return false
     val tab = AppState.tab
+    val loc = tab.loc
+    val ctrl = e.isCtrlPressed || e.isMetaPressed
+    val shift = e.isShiftPressed
+    val alt = e.isAltPressed
+
+    if (e.key == Key.Escape) return when {
+        CtxMenu.state != null -> { CtxMenu.dismiss(); true }
+        AppState.viewer != null && AppState.dialog == null -> { AppState.viewer = null; true }
+        AppState.dialog != null -> { AppState.dialog = null; true }
+        Sheets.current != null -> { Sheets.dismiss(); true }
+        AppState.showTopSheet -> { AppState.showTopSheet = false; true }
+        AppState.showTabs -> { AppState.showTabs = false; true }
+        AppState.showSettings -> { AppState.showSettings = false; true }
+        AppState.searching -> { AppState.searching = false; true }
+        tab.selection.isNotEmpty() -> { AppState.clearSelection(); true }
+        else -> false
+    }
+    if (anyOverlay()) return false
+    if (loc === Loc.WebVault) return ctrl && e.key == Key.W && run { AppState.closeTab(AppState.active); true }
+
     val sel = AppState.selectedEntries()
     val paths = sel.map { it.path }
     val dir = Actions.currentDir()
-    return when {
-        e.isCtrlPressed && e.key == Key.A -> { AppState.selectAll(); true }
-        e.isCtrlPressed && e.key == Key.C && paths.isNotEmpty() -> { Ops.copy(paths); true }
-        e.isCtrlPressed && e.key == Key.X && paths.isNotEmpty() -> { Ops.cut(paths); true }
-        e.isCtrlPressed && e.key == Key.V && dir != null && AppState.clip != null -> { Ops.paste(dir); true }
-        e.isCtrlPressed && e.key == Key.T -> { AppState.newTab(); true }
-        e.isCtrlPressed && e.key == Key.W -> { AppState.closeTab(AppState.active); true }
-        e.isCtrlPressed && e.key == Key.F -> { AppState.searching = true; true }
-        e.key == Key.Delete && sel.isNotEmpty() -> { Ops.delete(sel); true }
-        e.key == Key.F2 && sel.size == 1 -> { AppState.dialog = Dlg.Rename(sel[0]); true }
-        e.key == Key.F5 -> { AppState.refresh(); true }
-        e.isAltPressed && e.key == Key.DirectionLeft && tab.canBack -> { AppState.back(); true }
-        e.isAltPressed && e.key == Key.DirectionRight && tab.canForward -> { AppState.forward(); true }
-        e.isAltPressed && e.key == Key.DirectionUp && AppState.canUp() -> { AppState.up(); true }
-        e.key == Key.Escape && sel.isNotEmpty() -> { AppState.clearSelection(); true }
-        else -> false
+    val listing = loc.isListing()
+
+    // ---- app / tabs / navigation
+    when {
+        ctrl && shift && e.key == Key.N && dir != null -> { AppState.dialog = Dlg.NewItem(dir, true, "New folder"); return true }
+        ctrl && e.key == Key.T -> { AppState.newTab(); return true }
+        ctrl && e.key == Key.W -> { AppState.closeTab(AppState.active); return true }
+        ctrl && e.key == Key.Tab -> { AppState.selectTab(Math.floorMod(AppState.active + if (shift) -1 else 1, AppState.tabs.size)); return true }
+        ctrl && e.key.keyCode in numberKeys && !e.isAltPressed -> {
+            val n = numberKeys.indexOf(e.key.keyCode)
+            if (n in AppState.tabs.indices) { AppState.selectTab(n); return true }
+        }
+        (ctrl && e.key == Key.L) || (alt && e.key == Key.D) -> { AppState.addressTick++; return true }
+        (ctrl && e.key == Key.F) || e.key == Key.F3 -> { AppState.searching = true; return true }
+        ctrl && e.key == Key.Comma -> { AppState.showSettings = true; return true }
+        e.key == Key.F5 || (ctrl && e.key == Key.R) -> { AppState.refresh(); return true }
+        alt && e.key == Key.DirectionLeft && tab.canBack -> { AppState.back(); return true }
+        alt && e.key == Key.DirectionRight && tab.canForward -> { AppState.forward(); return true }
+        alt && e.key == Key.DirectionUp && AppState.canUp() -> { AppState.up(); return true }
+        alt && e.key == Key.Enter && sel.isNotEmpty() -> { AppState.dialog = Dlg.Properties(paths); return true }
+        ctrl && e.key == Key.H -> { Settings.update { copy(showHidden = !showHidden) }; AppState.refresh(); return true }
     }
+    if (!listing) return false
+
+    // ---- selection & clipboard
+    when {
+        ctrl && e.key == Key.A -> { AppState.selectAll(); return true }
+        ctrl && e.key == Key.C && paths.isNotEmpty() -> { Ops.copy(paths); return true }
+        ctrl && e.key == Key.X && paths.isNotEmpty() -> { Ops.cut(paths); return true }
+        ctrl && e.key == Key.V && dir != null && AppState.clip != null -> { Ops.paste(dir); return true }
+        ctrl && e.key == Key.I -> { val all = tab.entries.map { it.path }.toSet(); AppState.select(all - tab.selection); return true }
+        e.key == Key.Delete && sel.isNotEmpty() -> { if (shift) Ops.deleteForever(sel) else Ops.delete(sel); return true }
+        e.key == Key.F2 && sel.size == 1 -> { AppState.dialog = Dlg.Rename(sel[0]); return true }
+        ctrl && e.key == Key.D && sel.isNotEmpty() -> { sel.forEach { Settings.toggleFavorite(it.path) }; return true }
+    }
+
+    // ---- moving the cursor / opening
+    when (e.key) {
+        Key.DirectionDown -> BrowserNav.move?.invoke(0, 1, shift)
+        Key.DirectionUp -> BrowserNav.move?.invoke(0, -1, shift)
+        Key.DirectionLeft -> BrowserNav.move?.invoke(-1, 0, shift)
+        Key.DirectionRight -> BrowserNav.move?.invoke(1, 0, shift)
+        Key.MoveHome -> BrowserNav.edge?.invoke(false, shift)
+        Key.MoveEnd -> BrowserNav.edge?.invoke(true, shift)
+        Key.PageDown -> BrowserNav.page?.invoke(true, shift)
+        Key.PageUp -> BrowserNav.page?.invoke(false, shift)
+        Key.Enter, Key.NumPadEnter -> BrowserNav.open?.invoke()
+        Key.Backspace -> if (AppState.canUp()) AppState.up()
+        Key.Spacebar -> if (ctrl) { val p = tab.cursor; if (p != null) AppState.toggleSelect(p) } else return false
+        else -> {
+            // type-ahead: type a few letters to jump to the matching name
+            if (ctrl || alt) return false
+            val cp = e.utf16CodePoint
+            if (cp <= 32 || !Character.isLetterOrDigit(cp) && cp != '.'.code && cp != '_'.code && cp != '-'.code) return false
+            val now = System.currentTimeMillis()
+            if (now - BrowserNav.typedAt > 900) BrowserNav.typed = ""
+            BrowserNav.typedAt = now
+            BrowserNav.typed += String(Character.toChars(cp))
+            BrowserNav.type?.invoke(BrowserNav.typed) ?: return false
+        }
+    }
+    return true
 }
+
+private val numberKeys = listOf(Key.One, Key.Two, Key.Three, Key.Four, Key.Five, Key.Six, Key.Seven, Key.Eight, Key.Nine).map { it.keyCode }

@@ -20,6 +20,8 @@ android {
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            // signed with the debug key so the optimized build can be installed directly (much smoother than debug)
+            signingConfig = signingConfigs.getByName("debug")
         }
     }
     compileOptions {
@@ -45,10 +47,11 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.4")
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.appcompat:appcompat:1.7.0")
-    implementation("androidx.biometric:biometric:1.1.0")
     implementation("androidx.documentfile:documentfile:1.0.1")
     implementation("androidx.exifinterface:exifinterface:1.3.7")
     implementation("androidx.webkit:webkit:1.11.0")
+    implementation("androidx.profileinstaller:profileinstaller:1.3.1")
+    implementation("androidx.biometric:biometric:1.1.0")
     implementation("com.google.android.material:material:1.12.0")
     // archives (all pure-Java, work offline)
     implementation("org.apache.commons:commons-compress:1.26.2")

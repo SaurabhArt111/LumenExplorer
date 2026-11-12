@@ -9,6 +9,23 @@ import android.os.ParcelFileDescriptor
 import android.widget.MediaController
 import android.widget.VideoView
 import androidx.activity.compose.BackHandler
+import kotlin.math.abs
+import androidx.compose.ui.input.pointer.util.VelocityTracker
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.draw.clip
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.focusable
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.animate
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -134,33 +151,141 @@ private fun ViewerBar(title: String, onClose: () -> Unit, modifier: Modifier = M
 }
 
 // ---------------------------------------------------------------------------------------------- images & videos
+/**
+ * One-finger vertical swipe on the viewer: reports the running offset while dragging and the result on release.
+ * Horizontal movement (pager), pinch (2 fingers) and drags that start in [blockedBottom] px at the bottom (video controls) are left alone.
+ */
+private fun Modifier.verticalSwipe(
+    enabled: () -> Boolean,
+    blockedBottom: () -> Float,
+    onDrag: (Float) -> Unit,
+    onEnd: (total: Float, velocityY: Float) -> Unit,
+): Modifier = pointerInput(Unit) {
+    awaitEachGesture {
+        val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+        if (!enabled() || down.position.y > size.height - blockedBottom()) return@awaitEachGesture
+        val tracker = VelocityTracker()
+        tracker.addPosition(down.uptimeMillis, down.position)
+        val slop = viewConfiguration.touchSlop
+        var dx = 0f
+        var dy = 0f
+        var active = false
+        while (true) {
+            val ev = awaitPointerEvent(PointerEventPass.Initial)
+            val ch = ev.changes.firstOrNull { it.id == down.id } ?: return@awaitEachGesture
+            if (ev.changes.size > 1 || !enabled()) { if (active) onEnd(0f, 0f); return@awaitEachGesture }
+            if (!ch.pressed) { if (active) onEnd(dy, tracker.calculateVelocity().y); return@awaitEachGesture }
+            val d = ch.position - ch.previousPosition
+            tracker.addPosition(ch.uptimeMillis, ch.position)
+            if (!active) {
+                dx += d.x; dy += d.y
+                if (abs(dx) > slop && abs(dx) > abs(dy)) return@awaitEachGesture          // horizontal: the pager's business
+                if (abs(dy) > slop && abs(dy) > abs(dx) * 1.3f) { active = true; ch.consume(); onDrag(dy) }
+            } else {
+                dy += d.y
+                ch.consume()
+                onDrag(dy)
+            }
+        }
+    }
+}
+
 @Composable
 private fun MediaViewer(req: ViewerReq.Media, onClose: () -> Unit) {
     if (req.items.isEmpty()) { onClose(); return }
     val pager = rememberPagerState(initialPage = req.index.coerceIn(0, req.items.lastIndex), pageCount = { req.items.size })
     var chrome by remember { mutableStateOf(true) }
     var zoomed by remember { mutableStateOf(false) }
+    var details by remember { mutableStateOf(false) }
+    var dragY by remember { mutableFloatStateOf(0f) }
+    var h by remember { mutableFloatStateOf(1f) }
     val rotations = remember { mutableStateOf(mapOf<String, Float>()) }
+    val scope = rememberCoroutineScope()
+    val focus = remember { FocusRequester() }
+    val density = LocalDensity.current
+    LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
     BackHandler { onClose() }
     val cur = req.items.getOrNull(pager.currentPage)
-    Box(Modifier.fillMaxSize().background(Color.Black)) {
-        HorizontalPager(pager, Modifier.fillMaxSize(), userScrollEnabled = !zoomed, key = { req.items[it].path }) { page ->
-            val e = req.items[page]
-            if (e.kind == Kind.VIDEO) VideoPage(e, pager.currentPage == page) { chrome = !chrome }
-            else ImagePage(e, rotations.value[e.path] ?: 0f, { chrome = !chrome }) { z -> if (pager.currentPage == page) zoomed = z }
+    val progress = (abs(dragY) / (h * 0.45f)).coerceIn(0f, 1f)
+
+    fun finish(total: Float, vel: Float) {
+        scope.launch {
+            if (total > h * 0.16f || vel > 1500f) {
+                animate(dragY, h, animationSpec = tween(180)) { v, _ -> dragY = v }
+                onClose()
+            } else {
+                val openDetails = total < -h * 0.07f || vel < -1100f
+                animate(dragY, 0f, animationSpec = spring(dampingRatio = 0.8f, stiffness = 500f)) { v, _ -> dragY = v }
+                if (openDetails) details = true
+            }
         }
-        if (chrome && cur != null) {
+    }
+
+    Box(
+        Modifier.fillMaxSize().onSizeChanged { h = it.height.toFloat().coerceAtLeast(1f) }
+            .background(Color.Black.copy(alpha = 1f - 0.85f * (if (dragY > 0f) progress else 0f)))
+            .focusRequester(focus).focusable()
+            .onKeyEvent { ev ->
+                if (ev.type != KeyEventType.KeyDown) return@onKeyEvent false
+                when (ev.key) {
+                    Key.Escape, Key.DirectionDown -> { if (details) details = false else onClose(); true }
+                    Key.DirectionUp, Key.I -> { details = !details; true }
+                    Key.DirectionLeft -> { if (pager.currentPage > 0) scope.launch { pager.animateScrollToPage(pager.currentPage - 1) }; true }
+                    Key.DirectionRight, Key.Spacebar -> { if (pager.currentPage < req.items.lastIndex) scope.launch { pager.animateScrollToPage(pager.currentPage + 1) }; true }
+                    Key.Delete -> { cur?.let { Ops.delete(listOf(it)) }; true }
+                    else -> false
+                }
+            }
+            .verticalSwipe(
+                enabled = { !zoomed && !details },
+                blockedBottom = { if (cur?.kind == Kind.VIDEO) with(density) { 120.dp.toPx() } else 0f },
+                onDrag = { t -> dragY = if (t < 0f) max(t * 0.4f, -h * 0.22f) else t },
+                onEnd = { total, vel -> finish(total, vel) },
+            )
+    ) {
+        Box(Modifier.fillMaxSize().graphicsLayer { translationY = dragY; val sc = 1f - 0.12f * progress; scaleX = sc; scaleY = sc }) {
+            HorizontalPager(pager, Modifier.fillMaxSize(), userScrollEnabled = !zoomed, key = { req.items[it].path }) { page ->
+                val e = req.items[page]
+                if (e.kind == Kind.VIDEO) VideoPage(e, pager.currentPage == page) { chrome = !chrome }
+                else ImagePage(e, rotations.value[e.path] ?: 0f, { chrome = !chrome }) { z -> if (pager.currentPage == page) zoomed = z }
+            }
+        }
+        if (chrome && cur != null && abs(dragY) < 1f) {
             Column(Modifier.align(Alignment.TopCenter)) {
                 ViewerBar("${cur.name}", onClose) {
                     Txt("${pager.currentPage + 1}/${req.items.size}", 12.sp, color = Color.White.copy(alpha = 0.7f))
                     if (cur.kind == Kind.IMAGE) IconBtn(Icons.Filled.RotateRight, "Rotate", { rotations.value = rotations.value + (cur.path to (((rotations.value[cur.path] ?: 0f) + 90f) % 360f)) }, tint = Color.White)
                     IconBtn(Icons.Filled.Share, "Share", { Ops.share(listOf(cur.path)) }, tint = Color.White)
-                    IconBtn(Icons.Filled.Info, "Info", { AppState.dialog = Dlg.Properties(listOf(cur.path)) }, tint = Color.White)
+                    IconBtn(Icons.Filled.Info, "Details", { details = true }, tint = Color.White)
                     IconBtn(Icons.AutoMirrored.Filled.OpenInNew, "Open with", { Ops.openExternal(cur.path, chooser = true) }, tint = Color.White)
                     IconBtn(Icons.Filled.Delete, "Delete", { Ops.delete(listOf(cur)) }, tint = Color.White)
                 }
             }
+            // "swipe up for details" affordance
+            Box(Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = 10.dp).width(36.dp).height(4.dp).clip(RoundedCornerShape(2.dp)).background(Color.White.copy(alpha = 0.45f)))
         }
+        if (details && cur != null) MediaDetailsSheet(cur, onDismiss = { details = false })
+    }
+}
+
+/** Bottom sheet with everything we know about the current photo / video. Swipe it down to go back to the media. */
+@Composable
+private fun MediaDetailsSheet(e: FileEntry, onDismiss: () -> Unit) {
+    val c = Win.c
+    val info by produceState<List<Pair<String, String>>?>(null, e.path) { value = withContext(Dispatchers.IO) { MediaInfo.load(e) } }
+    DragSheet(onDismiss = onDismiss, title = "Details") {
+        val list = info
+        if (list == null) {
+            Box(Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = c.accent, strokeWidth = 2.dp, modifier = Modifier.size(28.dp)) }
+        } else {
+            Column(Modifier.padding(horizontal = 24.dp)) { list.forEach { (k, v) -> InfoLine(k, v) } }
+        }
+        Spacer(Modifier.height(8.dp))
+        Row(Modifier.fillMaxWidth().padding(horizontal = 24.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            GhostButton("Properties", { onDismiss(); AppState.dialog = Dlg.Properties(listOf(e.path)) }, Modifier.weight(1f))
+            GhostButton("Share", { Ops.share(listOf(e.path)) }, Modifier.weight(1f))
+        }
+        Spacer(Modifier.height(12.dp))
     }
 }
 

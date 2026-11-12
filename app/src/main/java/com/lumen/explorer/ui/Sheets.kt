@@ -6,6 +6,14 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import androidx.activity.compose.BackHandler
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -81,7 +89,8 @@ import kotlinx.coroutines.withContext
 import java.io.File
 
 /**
- * Centered card on wide screens, draggable bottom sheet on phones.
+ * Material 3 alert dialog: centered, 28 dp corners, 24 dp padding, right-aligned text buttons, 32 % scrim,
+ * fades/scales in with the emphasized-decelerate curve. Same on phones, tablets and desktop.
  */
 @Composable
 fun WinDialog(
@@ -95,33 +104,42 @@ fun WinDialog(
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val c = Win.c
-    val wide = LocalWide.current
-    val buttons: @Composable () -> Unit = {
-        Row(Modifier.fillMaxWidth().padding(top = 16.dp), horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.End)) {
-            GhostButton(cancel, onDismiss, Modifier.weight(1f, fill = !wide).let { if (wide) Modifier.widthIn(min = 100.dp) else it })
-            if (confirm != null && onConfirm != null) PrimaryButton(confirm, onConfirm, Modifier.weight(1f, fill = !wide).let { if (wide) Modifier.widthIn(min = 100.dp) else it }, enabled = confirmEnabled, danger = danger)
-        }
-    }
-    if (wide) {
-        BackHandler { onDismiss() }
-        Box(
-            Modifier.fillMaxSize().background(c.scrim).clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { onDismiss() }.imePadding(),
-            contentAlignment = Alignment.Center
+    var shown by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { shown = true }
+    val t by animateFloatAsState(if (shown) 1f else 0f, tween(220, easing = CubicBezierEasing(0.05f, 0.7f, 0.1f, 1.0f)), label = "dlg")
+    BackHandler { onDismiss() }
+    Box(
+        Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.32f * t))
+            .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { onDismiss() }
+            .statusBarsPadding().navigationBarsPadding().imePadding().padding(24.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            Modifier.widthIn(min = 280.dp, max = 460.dp).fillMaxWidth().heightIn(max = 640.dp)
+                .graphicsLayer { alpha = t; scaleX = 0.92f + 0.08f * t; scaleY = 0.92f + 0.08f * t }
+                .clip(RoundedCornerShape(28.dp)).background(c.card)
+                .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { }
+                .padding(top = 24.dp, bottom = 18.dp)
         ) {
-            Column(
-                Modifier.width(460.dp).heightIn(max = 640.dp).clip(RoundedCornerShape(14.dp)).background(c.card).border(1.dp, c.stroke, RoundedCornerShape(14.dp))
-                    .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { }.padding(22.dp)
+            Txt(title, 22.sp, FontWeight.Normal, modifier = Modifier.padding(horizontal = 24.dp).padding(bottom = 16.dp), maxLines = 2)
+            Column(Modifier.weight(1f, fill = false).padding(horizontal = 24.dp).verticalScroll(rememberScrollState())) { content() }
+            Row(
+                Modifier.fillMaxWidth().padding(top = 20.dp, start = 24.dp, end = 16.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End), verticalAlignment = Alignment.CenterVertically
             ) {
-                Txt(title, 19.sp, FontWeight.SemiBold, modifier = Modifier.padding(bottom = 12.dp))
-                Column(Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState())) { content() }
-                buttons()
+                DialogTextButton(cancel, onDismiss, c.accent)
+                if (confirm != null && onConfirm != null) DialogTextButton(confirm, onConfirm, if (danger) c.danger else c.accent, confirmEnabled)
             }
         }
-    } else {
-        DragSheet(onDismiss = onDismiss, title = title) {
-            Column(Modifier.padding(start = 20.dp, end = 20.dp, bottom = 16.dp)) { content(); buttons() }
-        }
     }
+}
+
+@Composable
+private fun DialogTextButton(text: String, onClick: () -> Unit, color: Color, enabled: Boolean = true) {
+    Box(
+        Modifier.heightIn(min = 40.dp).clip(RoundedCornerShape(20.dp)).clickable(enabled = enabled, role = Role.Button, onClick = onClick).padding(horizontal = 12.dp),
+        contentAlignment = Alignment.Center
+    ) { Txt(text, 14.sp, FontWeight.Medium, if (enabled) color else color.copy(alpha = 0.38f)) }
 }
 
 private fun copyText(ctx: Context, text: String) {

@@ -73,6 +73,14 @@ object Ops {
         }
     }
 
+    /** Shift+Delete: always asks, never uses the bin. */
+    fun deleteForever(entries: List<FileEntry>) {
+        if (entries.isEmpty()) return
+        val paths = entries.map { it.path }
+        val what = if (entries.size == 1) "\"${entries[0].name}\"" else "${entries.size} items"
+        AppState.dialog = Dlg.Confirm("Delete permanently", "$what will be deleted forever. This can't be undone.", "Delete", true) { doDeleteForever(paths) }
+    }
+
     private fun doTrash(paths: List<String>) {
         val trashed = ArrayList<Pair<RecycleBin, RecycleBin.Item>>()
         AppState.startJob("Moving to Recycle Bin", { p ->

@@ -24,7 +24,8 @@ object Thumbs {
     private val cache = object : LruCache<String, Bitmap>(((Runtime.getRuntime().maxMemory() / 8L).coerceAtMost(96L * 1024 * 1024)).toInt()) {
         override fun sizeOf(key: String, value: Bitmap): Int = value.byteCount
     }
-    private val gate = Semaphore(3)
+    private val gate = Semaphore((Runtime.getRuntime().availableProcessors() / 2).coerceIn(2, 4))
+    private var puts = 0
     private val pdfLock = Any()
     private val failed = HashSet<String>()
 
@@ -44,13 +45,51 @@ object Thumbs {
         cache.get(k)?.let { return it }
         if (synchronized(failed) { k in failed }) return null
         return withContext(Dispatchers.IO) {
+            // 1) memory  2) small on-disk cache (re-opening a big folder is then instant)  3) real decode, a few at a time
+            cache.get(k)?.let { return@withContext it }
+            diskGet(k)?.let { cache.put(k, it); return@withContext it }
             gate.withPermit {
                 ensureActive()
                 cache.get(k)?.let { return@withPermit it }
                 val b = runCatching { decode(e, bucket(px)) }.getOrNull()
-                if (b != null) cache.put(k, b) else synchronized(failed) { failed += k }
+                if (b != null) { cache.put(k, b); diskPut(k, b) } else synchronized(failed) { failed += k }
                 b
             }
+        }
+    }
+
+    // ------------------------------------------------------------------ disk cache
+    private val diskDir: File by lazy { File(app.cacheDir, "thumbs").apply { mkdirs() } }
+
+    private fun diskName(k: String): String {
+        var h = -3750763034362895579L
+        for (ch in k) h = (h xor ch.code.toLong()) * 1099511628211L
+        return java.lang.Long.toHexString(h) + ".w"
+    }
+
+    private fun diskGet(k: String): Bitmap? = try {
+        val f = File(diskDir, diskName(k))
+        if (f.exists()) BitmapFactory.decodeFile(f.path) else null
+    } catch (_: Throwable) { null }
+
+    @Suppress("DEPRECATION")
+    private fun diskPut(k: String, b: Bitmap) {
+        try {
+            val f = File(diskDir, diskName(k))
+            f.outputStream().use { out ->
+                b.compress(if (Build.VERSION.SDK_INT >= 30) Bitmap.CompressFormat.WEBP_LOSSY else Bitmap.CompressFormat.WEBP, 82, out)
+            }
+            if (++puts % 200 == 0) trimDisk()
+        } catch (_: Throwable) { }
+    }
+
+    private fun trimDisk() {
+        val files = diskDir.listFiles() ?: return
+        var total = files.sumOf { it.length() }
+        if (total < 160L * 1024 * 1024) return
+        for (f in files.sortedBy { it.lastModified() }) {
+            if (total < 110L * 1024 * 1024) break
+            total -= f.length(); f.delete()
         }
     }
 
@@ -91,8 +130,11 @@ object Thumbs {
             val o = androidx.exifinterface.media.ExifInterface(f.path).getAttributeInt(androidx.exifinterface.media.ExifInterface.TAG_ORIENTATION, 1)
             val m = android.graphics.Matrix()
             when (o) {
-                6 -> m.postRotate(90f); 3 -> m.postRotate(180f); 8 -> m.postRotate(270f)
-                2 -> m.postScale(-1f, 1f); 4 -> m.postScale(1f, -1f)
+                6 -> m.postRotate(90f)
+                3 -> m.postRotate(180f)
+                8 -> m.postRotate(270f)
+                2 -> m.postScale(-1f, 1f)
+                4 -> m.postScale(1f, -1f)
                 else -> return b
             }
             Bitmap.createBitmap(b, 0, 0, b.width, b.height, m, true)
@@ -103,6 +145,20 @@ object Thumbs {
         val r = MediaMetadataRetriever()
         return try {
             r.setDataSource(path)
+            if (Build.VERSION.SDK_INT >= 27) {
+                // decode straight to thumbnail size instead of a full-size frame
+                val vw = r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull() ?: 0
+                val vh = r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull() ?: 0
+                val rot = r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)?.toIntOrNull() ?: 0
+                val ow = if (rot == 90 || rot == 270) vh else vw
+                val oh = if (rot == 90 || rot == 270) vw else vh
+                if (ow > 0 && oh > 0) {
+                    val sc = px.toFloat() / max(ow, oh)
+                    val w = max(1, (ow * sc).toInt()); val h = max(1, (oh * sc).toInt())
+                    val f = r.getScaledFrameAtTime(1_000_000, MediaMetadataRetriever.OPTION_CLOSEST_SYNC, w, h) ?: r.getScaledFrameAtTime(0, MediaMetadataRetriever.OPTION_CLOSEST_SYNC, w, h)
+                    if (f != null) return f
+                }
+            }
             val frame = r.getFrameAtTime(1_000_000, MediaMetadataRetriever.OPTION_CLOSEST_SYNC) ?: r.getFrameAtTime(0)
             frame?.let { scaleDown(it, px) }
         } finally { runCatching { r.release() } }
@@ -121,21 +177,26 @@ object Thumbs {
         } finally { runCatching { r.release() } }
     }
 
-    private fun decodePdf(path: String, px: Int): Bitmap? = synchronized(pdfLock) {
-        var pfd: ParcelFileDescriptor? = null
-        try {
-            pfd = ParcelFileDescriptor.open(File(path), ParcelFileDescriptor.MODE_READ_ONLY)
-            PdfRenderer(pfd).use { r ->
-                if (r.pageCount == 0) return null
-                r.openPage(0).use { p ->
-                    val scale = px.toFloat() / max(p.width, p.height)
-                    val bmp = Bitmap.createBitmap(max(1, (p.width * scale).toInt()), max(1, (p.height * scale).toInt()), Bitmap.Config.ARGB_8888)
-                    bmp.eraseColor(android.graphics.Color.WHITE)
-                    p.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
-                    bmp
-                }
-            }
-        } finally { runCatching { pfd?.close() } }
+    private fun decodePdf(path: String, px: Int): Bitmap? {
+        synchronized(pdfLock) {
+            var pfd: ParcelFileDescriptor? = null
+            try {
+                val fd = ParcelFileDescriptor.open(File(path), ParcelFileDescriptor.MODE_READ_ONLY)
+                pfd = fd
+                val r = PdfRenderer(fd)
+                try {
+                    if (r.pageCount == 0) return null
+                    val p = r.openPage(0)
+                    try {
+                        val scale = px.toFloat() / max(p.width, p.height)
+                        val bmp = Bitmap.createBitmap(max(1, (p.width * scale).toInt()), max(1, (p.height * scale).toInt()), Bitmap.Config.ARGB_8888)
+                        bmp.eraseColor(android.graphics.Color.WHITE)
+                        p.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                        return bmp
+                    } finally { runCatching { p.close() } }
+                } finally { runCatching { r.close() } }
+            } finally { runCatching { pfd?.close() } }
+        }
     }
 
     @Suppress("DEPRECATION")
@@ -163,13 +224,16 @@ object Thumbs {
 
     /** Package label + version for the Properties/Info panel (APK only). */
     @Suppress("DEPRECATION")
-    fun apkInfo(path: String): String? = runCatching {
-        val pm = app.packageManager
-        val i = pm.getPackageArchiveInfo(path, 0) ?: return null
-        i.applicationInfo?.sourceDir = path; i.applicationInfo?.publicSourceDir = path
-        val label = i.applicationInfo?.loadLabel(pm)?.toString() ?: i.packageName
-        "$label  •  ${i.packageName}  •  v${i.versionName ?: "?"}"
-    }.getOrNull()
+    fun apkInfo(path: String): String? {
+        return try {
+            val pm = app.packageManager
+            val i = pm.getPackageArchiveInfo(path, 0) ?: return null
+            i.applicationInfo?.sourceDir = path
+            i.applicationInfo?.publicSourceDir = path
+            val label = i.applicationInfo?.loadLabel(pm)?.toString() ?: i.packageName
+            "$label  •  ${i.packageName}  •  v${i.versionName ?: "?"}"
+        } catch (_: Throwable) { null }
+    }
 
     fun trim() { cache.evictAll() }
 }

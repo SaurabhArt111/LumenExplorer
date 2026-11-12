@@ -1,12 +1,11 @@
 package com.lumen.explorer.ui
 
-import android.content.Intent
+import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -36,7 +35,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.lumen.explorer.AppState
 import com.lumen.explorer.Perms
 
 /** First-run screen: explains and requests the storage permissions. */
@@ -45,12 +43,10 @@ fun PermissionScreen() {
     val ctx = LocalContext.current
     val tick = Perms.tick
     val hasAll = Perms.hasAllFiles(ctx)
-    val hasRt = Perms.hasRuntime(ctx)
-    val launcher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { Perms.refresh(ctx) }
+    val hasRt = Perms.hasMedia(ctx)
+    val launcher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { Perms.refresh() }
     fun openAllFiles() {
-        try { ctx.startActivity(Perms.allFilesIntent(ctx)) } catch (_: Throwable) {
-            try { ctx.startActivity(Perms.allFilesFallbackIntent()) } catch (_: Throwable) { AppState.toast("Couldn't open system settings") }
-        }
+        Perms.requestAllFiles(ctx)
     }
     Box(Modifier.fillMaxSize().background(Win.c.bg), contentAlignment = Alignment.Center) {
         Column(
@@ -61,17 +57,17 @@ fun PermissionScreen() {
             Spacer(Modifier.height(16.dp))
             Txt("Lumen Explorer", size = 26.sp, weight = FontWeight.SemiBold)
             Spacer(Modifier.height(6.dp))
-            Txt("To browse and manage the files on your device, Lumen Explorer needs access to your storage.", size = 15.sp, color = Win.c.textDim, maxLines = 4, align = TextAlign.Center)
+            Txt("To browse and manage the files on your device, Lumen Explorer needs access to your storage.", size = 15.sp, color = Win.c.text2, maxLines = 4, align = TextAlign.Center)
             Spacer(Modifier.height(24.dp))
-            if (Perms.needsAllFilesStep()) {
+            if (Build.VERSION.SDK_INT >= 30) {
                 Step(Icons.Outlined.Folder, "All files access", "See and manage every folder, like a system file manager.", hasAll, "Allow") { openAllFiles() }
                 Spacer(Modifier.height(10.dp))
             }
-            Step(Icons.Outlined.Image, if (Perms.needsAllFilesStep()) "Photos, videos & audio" else "Storage", "Powers the Gallery, categories and thumbnails.", if (Perms.needsAllFilesStep()) hasRt else hasAll, "Allow") {
+            Step(Icons.Outlined.Image, if (Build.VERSION.SDK_INT >= 30) "Photos, videos & audio" else "Storage", "Powers the Gallery, categories and thumbnails.", if (Build.VERSION.SDK_INT >= 30) hasRt else hasAll, "Allow") {
                 launcher.launch(Perms.runtimePermissions())
             }
             Spacer(Modifier.height(24.dp))
-            PrimaryButton("Continue", { Perms.refresh(ctx) }, Modifier.fillMaxWidth(), enabled = hasAll)
+            PrimaryButton("Continue", { Perms.refresh() }, Modifier.fillMaxWidth(), enabled = hasAll)
             Spacer(Modifier.height(10.dp))
             Txt(
                 "Continue with limited access",
@@ -80,7 +76,7 @@ fun PermissionScreen() {
                 modifier = Modifier.clip(RoundedCornerShape(6.dp)).clickable { Perms.skipped = true }.padding(10.dp),
             )
             Spacer(Modifier.height(10.dp))
-            Txt("Everything stays on your device. This app has no internet permission.", size = 12.sp, color = Win.c.textDim, maxLines = 2, align = TextAlign.Center)
+            Txt("Everything stays on your device. This app has no internet permission.", size = 12.sp, color = Win.c.text2, maxLines = 2, align = TextAlign.Center)
         }
     }
 }
@@ -95,7 +91,7 @@ private fun Step(icon: ImageVector, title: String, sub: String, done: Boolean, a
         Spacer(Modifier.width(14.dp))
         Column(Modifier.weight(1f)) {
             Txt(title, size = 15.sp, weight = FontWeight.SemiBold)
-            Txt(sub, size = 12.sp, color = Win.c.textDim, maxLines = 3)
+            Txt(sub, size = 12.sp, color = Win.c.text2, maxLines = 3)
         }
         Spacer(Modifier.width(8.dp))
         if (done) Icon(Icons.Outlined.Check, "Granted", tint = Win.c.accent, modifier = Modifier.size(26.dp))

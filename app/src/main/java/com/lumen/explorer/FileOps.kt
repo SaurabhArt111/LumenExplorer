@@ -46,17 +46,39 @@ object FileOps {
         )
     }
 
-    /** null = folder can't be read (no permission / missing). */
-    fun list(dir: File, showHidden: Boolean, countChildren: Boolean = true): List<FileEntry>? {
-        val files = dir.listFiles() ?: return null
-        val out = ArrayList<FileEntry>(files.size)
+    /**
+     * null = folder can't be read (no permission / missing).
+     * One stat per item (java.nio attributes) instead of four; child counts are NOT computed here any more
+     * (the UI asks for them lazily, only for folders that are actually on screen).
+     */
+    fun list(dir: File, showHidden: Boolean, countChildren: Boolean = false): List<FileEntry>? {
+        val out = ArrayList<FileEntry>()
         var folderBudget = if (countChildren) 600 else 0
-        for (f in files) {
-            if (!showHidden && f.name.startsWith(".")) continue
-            if (f.isDirectory) {
-                val c = if (folderBudget > 0) { folderBudget--; countChildren(f, showHidden) } else -1
-                out += entry(f, c)
-            } else out += entry(f)
+        try {
+            java.nio.file.Files.newDirectoryStream(dir.toPath()).use { ds ->
+                for (p in ds) {
+                    val name = p.fileName?.toString() ?: continue
+                    if (!showHidden && name.startsWith(".")) continue
+                    val at = try { java.nio.file.Files.readAttributes(p, java.nio.file.attribute.BasicFileAttributes::class.java) } catch (_: Exception) { null }
+                    if (at == null) { out += entry(p.toFile()); continue }
+                    val isDir = at.isDirectory
+                    val c = if (isDir && folderBudget > 0) { folderBudget--; countChildren(p.toFile(), showHidden) } else -1
+                    out += FileEntry(
+                        path = p.toString(), name = name, isDir = isDir,
+                        size = if (isDir) 0L else at.size(), modified = at.lastModifiedTime().toMillis(),
+                        kind = Mime.kindOf(name, isDir), ext = if (isDir) "" else Paths.ext(name),
+                        hidden = name.startsWith("."), children = c
+                    )
+                }
+            }
+        } catch (_: Exception) {
+            // fall back to the classic API (some file systems refuse DirectoryStream)
+            val files = dir.listFiles() ?: return null
+            out.clear()
+            for (f in files) {
+                if (!showHidden && f.name.startsWith(".")) continue
+                out += entry(f)
+            }
         }
         return out
     }

@@ -23,6 +23,32 @@ import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material.icons.filled.Unarchive
 import androidx.compose.material.icons.filled.Tab
+import androidx.compose.material.icons.automirrored.filled.Sort
+import androidx.compose.material.icons.automirrored.filled.ViewList
+import androidx.compose.material.icons.filled.Abc
+import androidx.compose.material.icons.filled.Apps
+import androidx.compose.material.icons.filled.ArrowDownward
+import androidx.compose.material.icons.filled.ArrowUpward
+import androidx.compose.material.icons.filled.Block
+import androidx.compose.material.icons.filled.CalendarMonth
+import androidx.compose.material.icons.filled.Category
+import androidx.compose.material.icons.filled.CheckBox
+import androidx.compose.material.icons.filled.Compress
+import androidx.compose.material.icons.filled.Deselect
+import androidx.compose.material.icons.filled.FilterListOff
+import androidx.compose.material.icons.filled.FlipToBack
+import androidx.compose.material.icons.filled.GridView
+import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material.icons.filled.SortByAlpha
+import androidx.compose.material.icons.filled.Straighten
+import androidx.compose.material.icons.filled.TableRows
+import androidx.compose.material.icons.filled.ViewAgenda
+import androidx.compose.material.icons.filled.ViewComfy
+import androidx.compose.material.icons.filled.ViewHeadline
+import androidx.compose.material.icons.filled.ViewModule
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.ui.graphics.vector.ImageVector
 import com.lumen.explorer.AppState
 import com.lumen.explorer.Conflict
 import com.lumen.explorer.Dlg
@@ -42,7 +68,7 @@ object Actions {
     /** current directory if the tab shows a real folder (otherwise null → can't create/paste here) */
     fun currentDir(): String? = (AppState.tab.loc as? Loc.Dir)?.path
 
-    private fun reload() = AppState.tabs.forEach { AppState.load(it) }
+    private fun reload() { com.lumen.explorer.ChildCounts.clear(); AppState.tabs.forEach { AppState.load(it) } }
 
     fun newMenu(): List<MenuEntry> {
         val dir = currentDir()
@@ -54,33 +80,59 @@ object Actions {
         )
     }
 
+    private fun sortIcon(sb: SortBy): ImageVector = when (sb) {
+        SortBy.NAME -> Icons.Filled.SortByAlpha
+        SortBy.MODIFIED -> Icons.Filled.Schedule
+        SortBy.SIZE -> Icons.Filled.Straighten
+        SortBy.TYPE -> Icons.Filled.Category
+    }
+
+    private fun groupIcon(g: GroupBy): ImageVector = when (g) {
+        GroupBy.NONE -> Icons.Filled.Block
+        GroupBy.NAME -> Icons.Filled.SortByAlpha
+        GroupBy.DATE -> Icons.Filled.CalendarMonth
+        GroupBy.SIZE -> Icons.Filled.Straighten
+        GroupBy.TYPE -> Icons.Filled.Category
+    }
+
+    private fun viewIcon(m: ViewMode): ImageVector = when (m) {
+        ViewMode.XL -> Icons.Filled.GridView
+        ViewMode.LARGE -> Icons.Filled.ViewModule
+        ViewMode.MEDIUM -> Icons.Filled.ViewComfy
+        ViewMode.SMALL -> Icons.Filled.Apps
+        ViewMode.LIST -> Icons.Filled.ViewHeadline
+        ViewMode.DETAILS -> Icons.AutoMirrored.Filled.ViewList
+        ViewMode.TILES -> Icons.Filled.ViewAgenda
+        ViewMode.CONTENT -> Icons.Filled.TableRows
+    }
+
     fun sortMenu(): List<MenuEntry> {
         val s = Settings.s
         val out = ArrayList<MenuEntry>()
         out += MenuEntry.header("Sort by")
-        SortBy.values().forEach { sb -> out += MenuEntry(sb.label, null, checked = s.sortBy == sb) { Settings.update { copy(sortBy = sb) }; reload() } }
+        SortBy.values().forEach { sb -> out += MenuEntry(sb.label, sortIcon(sb), checked = s.sortBy == sb) { Settings.update { copy(sortBy = sb) }; reload() } }
         out += MenuEntry.divider()
-        out += MenuEntry("Ascending", null, checked = s.sortAsc) { Settings.update { copy(sortAsc = true) }; reload() }
-        out += MenuEntry("Descending", null, checked = !s.sortAsc) { Settings.update { copy(sortAsc = false) }; reload() }
+        out += MenuEntry("Ascending", Icons.Filled.ArrowUpward, checked = s.sortAsc) { Settings.update { copy(sortAsc = true) }; reload() }
+        out += MenuEntry("Descending", Icons.Filled.ArrowDownward, checked = !s.sortAsc) { Settings.update { copy(sortAsc = false) }; reload() }
         out += MenuEntry.divider()
-        out += MenuEntry("Folders first", null, checked = s.foldersFirst) { Settings.update { copy(foldersFirst = !foldersFirst) }; reload() }
+        out += MenuEntry("Folders first", Icons.Filled.Folder, checked = s.foldersFirst) { Settings.update { copy(foldersFirst = !foldersFirst) }; reload() }
         return out
     }
 
     fun viewMenu(): List<MenuEntry> {
         val s = Settings.s
         val out = ArrayList<MenuEntry>()
-        ViewMode.values().forEach { m -> out += MenuEntry(m.label, null, checked = s.viewMode == m) { Settings.update { copy(viewMode = m) } } }
+        ViewMode.values().forEach { m -> out += MenuEntry(m.label, viewIcon(m), checked = s.viewMode == m) { Settings.update { copy(viewMode = m) } } }
         out += MenuEntry.divider()
         out += MenuEntry.header("Group by")
-        GroupBy.values().forEach { g -> out += MenuEntry(g.label, null, checked = s.groupBy == g) { Settings.update { copy(groupBy = g) } } }
+        GroupBy.values().forEach { g -> out += MenuEntry(g.label, groupIcon(g), checked = s.groupBy == g) { Settings.update { copy(groupBy = g) } } }
         out += MenuEntry.divider()
         out += MenuEntry.header("Show")
-        out += MenuEntry("Hidden items", null, checked = s.showHidden) { Settings.update { copy(showHidden = !showHidden) }; reload() }
-        out += MenuEntry("File name extensions", null, checked = s.showExt) { Settings.update { copy(showExt = !showExt) } }
-        out += MenuEntry("Item check boxes", null, checked = s.checkboxes) { Settings.update { copy(checkboxes = !checkboxes) } }
-        out += MenuEntry("Thumbnails", null, checked = s.thumbnails) { Settings.update { copy(thumbnails = !thumbnails) } }
-        out += MenuEntry("Compact view", null, checked = s.compact) { Settings.update { copy(compact = !compact) } }
+        out += MenuEntry("Hidden items", Icons.Filled.Visibility, checked = s.showHidden) { Settings.update { copy(showHidden = !showHidden) }; reload() }
+        out += MenuEntry("File name extensions", Icons.Filled.Abc, checked = s.showExt) { Settings.update { copy(showExt = !showExt) } }
+        out += MenuEntry("Item check boxes", Icons.Filled.CheckBox, checked = s.checkboxes) { Settings.update { copy(checkboxes = !checkboxes) } }
+        out += MenuEntry("Thumbnails", Icons.Filled.Image, checked = s.thumbnails) { Settings.update { copy(thumbnails = !thumbnails) } }
+        out += MenuEntry("Compact view", Icons.Filled.Compress, checked = s.compact) { Settings.update { copy(compact = !compact) } }
         return out
     }
 
@@ -88,10 +140,27 @@ object Actions {
         val t = AppState.tab
         val kinds = listOf(Kind.FOLDER, Kind.IMAGE, Kind.VIDEO, Kind.AUDIO, Kind.DOCUMENT, Kind.PDF, Kind.ARCHIVE, Kind.APK)
         val out = ArrayList<MenuEntry>()
-        out += MenuEntry("All items", null, checked = t.filter == null) { t.filter = null }
+        out += MenuEntry("All items", Icons.Filled.FilterListOff, checked = t.filter == null) { t.filter = null }
         out += MenuEntry.divider()
         val names = mapOf(Kind.FOLDER to "Folders only", Kind.IMAGE to "Images only", Kind.VIDEO to "Videos only", Kind.AUDIO to "Audio only", Kind.DOCUMENT to "Documents only", Kind.PDF to "PDF files only", Kind.ARCHIVE to "Archives only", Kind.APK to "Apps (APK) only")
-        kinds.forEach { k -> out += MenuEntry(names.getValue(k), null, checked = t.filter == k) { t.filter = k } }
+        kinds.forEach { k -> out += MenuEntry(names.getValue(k), kindIcon(k), checked = t.filter == k) { t.filter = k } }
+        return out
+    }
+
+    /** Right-click on empty space. */
+    fun blankEntries(): List<MenuEntry> {
+        val dir = currentDir()
+        val t = AppState.tab
+        val out = ArrayList<MenuEntry>()
+        if (dir != null) {
+            out += newMenu()
+            out += MenuEntry("Paste", Icons.Filled.ContentPaste, AppState.clip != null) { Ops.paste(dir) }
+            out += MenuEntry.divider()
+        }
+        out += MenuEntry("Select all", Icons.Filled.SelectAll, t.entries.isNotEmpty()) { AppState.selectAll() }
+        out += MenuEntry("Sort by…", Icons.AutoMirrored.Filled.Sort) { Sheets.show("Sort by") { d -> ActionList(sortMenu(), d) } }
+        out += MenuEntry("View…", Icons.AutoMirrored.Filled.ViewList) { Sheets.show("View") { d -> ActionList(viewMenu(), d) } }
+        out += MenuEntry("Refresh", Icons.Filled.Refresh) { AppState.refresh() }
         return out
     }
 
@@ -100,8 +169,8 @@ object Actions {
         val sel = AppState.selectedEntries()
         val out = ArrayList<MenuEntry>()
         out += MenuEntry("Select all", Icons.Filled.SelectAll, t.entries.isNotEmpty()) { AppState.selectAll() }
-        out += MenuEntry("Invert selection", null, t.entries.isNotEmpty()) { AppState.select(t.entries.map { it.path }.toSet() - t.selection) }
-        out += MenuEntry("Select none", null, t.selection.isNotEmpty()) { AppState.clearSelection() }
+        out += MenuEntry("Invert selection", Icons.Filled.FlipToBack, t.entries.isNotEmpty()) { AppState.select(t.entries.map { it.path }.toSet() - t.selection) }
+        out += MenuEntry("Select none", Icons.Filled.Deselect, t.selection.isNotEmpty()) { AppState.clearSelection() }
         out += MenuEntry.divider()
         if (sel.size == 1 && !sel[0].isDir) out += MenuEntry("Open with…", Icons.AutoMirrored.Filled.OpenInNew) { Ops.openExternal(sel[0].path, chooser = true) }
         if (sel.isNotEmpty()) out += MenuEntry("Move to…", Icons.Filled.FolderOpen) { pickDest(sel, true) }

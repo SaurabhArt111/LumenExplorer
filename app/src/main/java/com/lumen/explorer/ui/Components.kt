@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -276,20 +277,7 @@ fun WinField(
 ) {
     var tfv by remember { mutableStateOf(TextFieldValue(value)) }
     if (tfv.text != value) tfv = TextFieldValue(value)
-    WinField(
-        value = tfv,
-        onValueChange = { tfv = it; onValueChange(it.text) },
-        modifier = modifier,
-        placeholder = placeholder,
-        autoFocus = autoFocus,
-        password = password,
-        imeAction = imeAction,
-        onDone = onDone,
-        error = error,
-        mono = mono,
-        singleLine = singleLine,
-        leading = leading
-    )
+    WinField(tfv, { tfv = it; onValueChange(it.text) }, modifier, placeholder, autoFocus, password, imeAction, onDone, error, mono, singleLine, leading)
 }
 
 // ---------------------------------------------------------------------------------------------- thumbnails
@@ -349,10 +337,10 @@ fun SheetRow(label: String, onClick: () -> Unit, icon: ImageVector? = null, sub:
     val c = Win.c
     val col = if (danger) c.danger else c.text
     Row(
-        Modifier.fillMaxWidth().heightIn(min = 52.dp).clickable(enabled = enabled, onClick = onClick).padding(horizontal = 20.dp, vertical = 8.dp),
+        Modifier.fillMaxWidth().heightIn(min = 56.dp).clickable(enabled = enabled, onClick = onClick).padding(horizontal = 24.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        if (icon != null) { Icon(icon, null, tint = if (enabled) (if (danger) c.danger else c.text2) else c.text2.copy(alpha = 0.4f), modifier = Modifier.size(22.dp)); Spacer(Modifier.width(16.dp)) }
+        if (icon != null) { Icon(icon, null, tint = if (enabled) (if (danger) c.danger else c.text2) else c.text2.copy(alpha = 0.4f), modifier = Modifier.size(24.dp)); Spacer(Modifier.width(20.dp)) }
         Column(Modifier.weight(1f)) {
             Txt(label, 16.sp, color = if (enabled) col else c.text2.copy(alpha = 0.6f))
             if (sub != null) Txt(sub, 12.sp, color = c.text2, maxLines = 2)
@@ -367,7 +355,7 @@ fun ActionList(entries: List<MenuEntry>, dismiss: () -> Unit) {
     Column(Modifier.padding(bottom = 8.dp)) {
         for (e in entries) when {
             e.divider -> HDivider(Modifier.padding(vertical = 4.dp, horizontal = 16.dp))
-            e.header -> Txt(e.label, 12.sp, FontWeight.SemiBold, c.accent, Modifier.padding(start = 20.dp, top = 10.dp, bottom = 2.dp))
+            e.header -> Txt(e.label, 12.sp, FontWeight.SemiBold, c.accent, Modifier.padding(start = 24.dp, top = 12.dp, bottom = 4.dp))
             else -> SheetRow(e.label, { dismiss(); e.onClick() }, e.icon, danger = e.danger, checked = e.checked, enabled = e.enabled)
         }
     }
@@ -390,18 +378,8 @@ fun MenuAnchor(title: String, entries: () -> List<MenuEntry>, content: @Composab
             }
         }
         if (wide) {
-            DropdownMenu(expanded = open, onDismissRequest = { open = false }, modifier = Modifier.background(c.card)) {
-                for (e in entries()) when {
-                    e.divider -> HDivider(Modifier.padding(vertical = 4.dp))
-                    e.header -> Txt(e.label, 12.sp, FontWeight.SemiBold, c.accent, Modifier.padding(start = 16.dp, top = 8.dp, end = 16.dp))
-                    else -> DropdownMenuItem(
-                        text = { Txt(e.label, 14.sp, color = if (e.danger) c.danger else c.text) },
-                        onClick = { open = false; e.onClick() },
-                        enabled = e.enabled,
-                        leadingIcon = e.icon?.let { ic -> { Icon(ic, null, tint = if (e.danger) c.danger else c.text2, modifier = Modifier.size(20.dp)) } },
-                        trailingIcon = if (e.checked) ({ Icon(Icons.Filled.Check, null, tint = c.accent, modifier = Modifier.size(18.dp)) }) else null,
-                    )
-                }
+            DropdownMenu(expanded = open, onDismissRequest = { open = false }, modifier = Modifier.widthIn(min = 220.dp).background(c.card)) {
+                MenuItems(entries()) { open = false }
             }
         }
     }

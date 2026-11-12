@@ -10,10 +10,12 @@ import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -22,6 +24,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -61,6 +64,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -106,48 +110,117 @@ fun locIcon(l: Loc): ImageVector = when (l) {
 }
 
 // ---------------------------------------------------------------------------------------------- tab strip
+/** pull-down on any bar opens quick settings (the top sheet) */
+private fun Modifier.pullForQuickSettings(): Modifier = pointerInput(Unit) {
+    var acc = 0f
+    detectVerticalDragGestures(
+        onDragStart = { acc = 0f },
+        onVerticalDrag = { _, dy -> acc += dy; if (acc > 48f) { AppState.showTopSheet = true; acc = -1e9f } },
+        onDragEnd = { acc = 0f }, onDragCancel = { acc = 0f }
+    )
+}
+
+/**
+ * Chrome-style strip for tablets / desktop: tabs share the width equally (72–220 dp), shrink as more open and scroll only
+ * when they no longer fit. The active tab is joined to the toolbar below it.
+ */
 @Composable
 fun TabStrip(modifier: Modifier = Modifier) {
     val c = Win.c
-    var acc by remember { mutableStateOf(0f) }
-    Row(
-        modifier.fillMaxWidth().height(46.dp).background(c.bg)
-            .pointerInput(Unit) {
-                // pull down on the tab strip → quick settings (top sheet)
-                detectVerticalDragGestures(
-                    onDragStart = { acc = 0f },
-                    onVerticalDrag = { _, dy -> acc += dy; if (acc > 40f) { AppState.showTopSheet = true; acc = -1e9f } },
-                    onDragEnd = { acc = 0f }, onDragCancel = { acc = 0f }
-                )
-            },
-        verticalAlignment = Alignment.Bottom
-    ) {
-        Row(Modifier.weight(1f, fill = false).horizontalScroll(rememberScrollState()).padding(start = 8.dp, top = 6.dp)) {
-            AppState.tabs.forEachIndexed { i, t ->
-                val active = i == AppState.active
-                Row(
-                    Modifier.padding(end = 2.dp).widthIn(min = 110.dp, max = 190.dp).height(40.dp)
-                        .clip(RoundedCornerShape(topStart = 10.dp, topEnd = 10.dp))
-                        .background(if (active) c.surface else Color.Transparent)
-                        .clickable { AppState.selectTab(i) }.padding(start = 12.dp, end = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(locIcon(t.loc), null, tint = if (active) c.accent else c.text2, modifier = Modifier.size(18.dp))
-                    Spacer(Modifier.width(8.dp))
-                    Txt(t.loc.title(), 13.sp, if (active) FontWeight.SemiBold else FontWeight.Normal, c.text, Modifier.weight(1f))
-                    IconBtn(Icons.Filled.Close, "Close tab", { AppState.closeTab(i) }, size = 30.dp, iconSize = 15.dp, tint = c.text2)
+    BoxWithConstraints(modifier.fillMaxWidth().height(44.dp).background(c.bg).pullForQuickSettings()) {
+        val n = AppState.tabs.size
+        val reserved = 36.dp + 44.dp + 12.dp
+        val avail = maxWidth - reserved
+        val tabW = (avail / n.coerceAtLeast(1)).coerceIn(72.dp, 220.dp)
+        Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.Bottom) {
+            Row(Modifier.weight(1f, fill = false).horizontalScroll(rememberScrollState()).padding(start = 8.dp, top = 6.dp)) {
+                AppState.tabs.forEachIndexed { i, t ->
+                    val active = i == AppState.active
+                    val next = i + 1 == AppState.active
+                    Row(
+                        Modifier.width(tabW).height(38.dp)
+                            .clip(RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp))
+                            .background(if (active) c.surface else Color.Transparent)
+                            .clickable { AppState.selectTab(i) }.padding(start = 12.dp, end = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(locIcon(t.loc), null, tint = if (active) c.accent else c.text2, modifier = Modifier.size(17.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Txt(t.loc.title(), 13.sp, if (active) FontWeight.SemiBold else FontWeight.Normal, if (active) c.text else c.text2, Modifier.weight(1f), maxLines = 1)
+                        if (active || tabW >= 110.dp) IconBtn(Icons.Filled.Close, "Close tab", { AppState.closeTab(i) }, size = 30.dp, iconSize = 14.dp, tint = c.text2)
+                        else Spacer(Modifier.width(10.dp))
+                    }
+                    if (!active && !next && i < n - 1) Box(Modifier.align(Alignment.CenterVertically).width(1.dp).height(16.dp).background(c.stroke))
                 }
             }
+            IconBtn(Icons.Filled.Add, "New tab", { AppState.newTab() }, size = 36.dp, iconSize = 20.dp, modifier = Modifier.padding(start = 2.dp, bottom = 4.dp))
+            Spacer(Modifier.weight(0.0001f))
+            IconBtn(Icons.Filled.Tune, "Quick settings", { AppState.showTopSheet = true }, size = 40.dp, modifier = Modifier.padding(end = 4.dp, bottom = 3.dp))
         }
-        IconBtn(Icons.Filled.Add, "New tab", { AppState.newTab() }, size = 36.dp, iconSize = 20.dp, modifier = Modifier.padding(bottom = 4.dp))
-        Spacer(Modifier.weight(1f))
-        IconBtn(Icons.Filled.Tune, "Quick settings", { AppState.showTopSheet = true }, modifier = Modifier.padding(bottom = 3.dp))
+    }
+}
+
+/** Phone: the tab-count button (square with the number) that opens the tab switcher. */
+@Composable
+private fun TabCountButton() {
+    val c = Win.c
+    Box(Modifier.size(44.dp).clip(CircleShape).clickable(role = androidx.compose.ui.semantics.Role.Button, onClickLabel = "Open tab switcher") { AppState.showTabs = true }, contentAlignment = Alignment.Center) {
+        Box(Modifier.size(24.dp).border(2.dp, c.text, RoundedCornerShape(6.dp)), contentAlignment = Alignment.Center) {
+            Txt(AppState.tabs.size.coerceAtMost(99).toString(), 11.sp, FontWeight.Bold, c.text)
+        }
+    }
+}
+
+/** Phone tab switcher: a normal draggable bottom sheet with one row per tab. */
+@Composable
+fun TabSwitcherHost() {
+    if (!AppState.showTabs) return
+    val c = Win.c
+    val close = { AppState.showTabs = false }
+    DragSheet(onDismiss = close, title = "Tabs (${AppState.tabs.size})") {
+        AppState.tabs.forEachIndexed { i, t ->
+            val active = i == AppState.active
+            Row(
+                Modifier.fillMaxWidth().heightIn(min = 60.dp).background(if (active) c.accentSoft else Color.Transparent)
+                    .clickable { AppState.selectTab(i); close() }.padding(start = 24.dp, end = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(locIcon(t.loc), null, tint = if (active) c.accent else c.text2, modifier = Modifier.size(24.dp))
+                Spacer(Modifier.width(20.dp))
+                Column(Modifier.weight(1f).padding(vertical = 8.dp)) {
+                    Txt(t.loc.title(), 16.sp, if (active) FontWeight.SemiBold else FontWeight.Normal, maxLines = 1)
+                    val sub = (t.loc as? Loc.Dir)?.path
+                    if (sub != null) Txt(sub, 12.sp, color = c.text2, maxLines = 1)
+                }
+                IconBtn(Icons.Filled.Close, "Close tab", { AppState.closeTab(i); if (AppState.tabs.size <= 1 && i == 0) close() }, tint = c.text2)
+            }
+        }
+        HDivider(Modifier.padding(vertical = 4.dp))
+        SheetRow("New tab", { AppState.newTab(); close() }, icon = Icons.Filled.Add)
+        if (AppState.tabs.size > 1) SheetRow("Close other tabs", {
+            val keep = AppState.tab
+            AppState.tabs.toList().forEach { if (it !== keep) AppState.closeTab(AppState.tabs.indexOf(it)) }
+            close()
+        }, icon = Icons.Filled.Close)
+        SheetRow("Quick settings", { close(); AppState.showTopSheet = true }, icon = Icons.Filled.Tune)
+    }
+}
+
+/** Full-screen SecureVault: nothing but a slim top tab with the title and a close button. */
+@Composable
+fun VaultTopTab(modifier: Modifier = Modifier) {
+    val c = Win.c
+    Row(modifier.fillMaxWidth().height(44.dp).background(Color(0xFF0B0F17)).padding(start = 14.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+        Icon(Icons.Filled.Lock, null, tint = c.accent, modifier = Modifier.size(18.dp))
+        Spacer(Modifier.width(10.dp))
+        Txt("SecureVault", 14.sp, FontWeight.SemiBold, Color(0xFFE6EAF2), Modifier.weight(1f))
+        IconBtn(Icons.Filled.Close, "Close SecureVault", { AppState.closeTab(AppState.active) }, size = 40.dp, iconSize = 20.dp, tint = Color(0xFFE6EAF2))
     }
 }
 
 // ---------------------------------------------------------------------------------------------- navigation row
 @Composable
-fun NavRow(onMenu: () -> Unit, modifier: Modifier = Modifier) {
+fun NavRow(onMenu: () -> Unit, showTabButton: Boolean, modifier: Modifier = Modifier) {
     val c = Win.c
     val wide = LocalWide.current
     val tab = AppState.tab
@@ -155,27 +228,34 @@ fun NavRow(onMenu: () -> Unit, modifier: Modifier = Modifier) {
         SearchRow(modifier)
         return
     }
-    Row(modifier.fillMaxWidth().height(56.dp).background(c.surface).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-        if (!wide) IconBtn(Icons.Filled.Menu, "Menu", onMenu)
-        IconBtn(Icons.AutoMirrored.Filled.ArrowBack, "Back", { AppState.back() }, enabled = tab.canBack)
-        if (wide) IconBtn(Icons.AutoMirrored.Filled.ArrowForward, "Forward", { AppState.forward() }, enabled = tab.canForward)
-        IconBtn(Icons.Filled.ArrowUpward, "Up", { AppState.up() }, enabled = AppState.canUp())
-        AddressBar(Modifier.weight(1f).padding(horizontal = 4.dp))
+    val roomy = wide || !showTabButton
+    Row(modifier.fillMaxWidth().height(56.dp).background(c.surface).pullForQuickSettings().padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+        if (!wide) IconBtn(Icons.Filled.Menu, "Menu", onMenu, size = if (roomy) 48.dp else 42.dp)
+        IconBtn(Icons.AutoMirrored.Filled.ArrowBack, "Back", { AppState.back() }, enabled = tab.canBack, size = if (roomy) 48.dp else 42.dp)
+        if (roomy) {
+            IconBtn(Icons.AutoMirrored.Filled.ArrowForward, "Forward", { AppState.forward() }, enabled = tab.canForward)
+            IconBtn(Icons.Filled.ArrowUpward, "Up", { AppState.up() }, enabled = AppState.canUp())
+        }
+        AddressBar(Modifier.weight(1f).padding(horizontal = 4.dp), showUp = !roomy)
         if (wide) SearchBox(Modifier.width(260.dp).padding(end = 6.dp))
-        else IconBtn(Icons.Filled.Search, "Search", { AppState.searching = true })
+        else IconBtn(Icons.Filled.Search, "Search", { AppState.searching = true }, size = if (roomy) 48.dp else 42.dp)
+        if (showTabButton) TabCountButton()
     }
 }
 
 @Composable
-private fun AddressBar(modifier: Modifier = Modifier) {
+private fun AddressBar(modifier: Modifier = Modifier, showUp: Boolean = false) {
     val c = Win.c
     val tab = AppState.tab
     val loc = tab.loc
     var editing by remember(tab.id, loc) { mutableStateOf(false) }
-    val shape = RoundedCornerShape(8.dp)
-    Row(modifier.height(42.dp).clip(shape).background(c.bg).border(1.dp, c.stroke, shape).padding(start = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+    var seen by remember { mutableIntStateOf(AppState.addressTick) }
+    val tick = AppState.addressTick
+    LaunchedEffect(tick) { if (tick != seen) { seen = tick; if (loc is Loc.Dir) editing = true } }
+    val shape = RoundedCornerShape(24.dp)
+    Row(modifier.height(42.dp).clip(shape).background(c.bg).border(1.dp, c.stroke, shape).padding(start = 12.dp), verticalAlignment = Alignment.CenterVertically) {
         if (editing && loc is Loc.Dir) {
-            var tf by remember { mutableStateOf(TextFieldValue(loc.path, TextRange(loc.path.length))) }
+            var tf by remember { mutableStateOf(TextFieldValue(loc.path, TextRange(0, loc.path.length))) }
             WinField(
                 tf, { tf = it }, Modifier.weight(1f), autoFocus = true, imeAction = ImeAction.Go, mono = true,
                 onDone = {
@@ -204,6 +284,7 @@ private fun AddressBar(modifier: Modifier = Modifier) {
                     }
                 } else Txt(loc.title(), 15.sp, FontWeight.SemiBold)
             }
+            if (showUp && AppState.canUp()) IconBtn(Icons.Filled.ArrowUpward, "Up", { AppState.up() }, size = 36.dp, iconSize = 18.dp, tint = c.text2)
             IconBtn(Icons.Filled.Refresh, "Refresh", {
                 AppState.refresh()
                 if (loc is Loc.Category || loc === Loc.Gallery || loc === Loc.Recent) FileIndex.scan(AppState.app, force = true)
@@ -252,7 +333,7 @@ private fun CmdBtn(icon: ImageVector, label: String, onClick: () -> Unit, enable
     val wide = LocalWide.current
     val col = tint ?: c.text
     Row(
-        Modifier.height(44.dp).clip(RoundedCornerShape(8.dp)).clickable(enabled = enabled, onClick = onClick).padding(horizontal = if (wide) 10.dp else 8.dp),
+        Modifier.height(40.dp).clip(RoundedCornerShape(20.dp)).clickable(enabled = enabled, onClick = onClick).padding(horizontal = if (wide) 12.dp else 10.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Icon(icon, label, tint = if (enabled) col else col.copy(alpha = 0.32f), modifier = Modifier.size(22.dp))

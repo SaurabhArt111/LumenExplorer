@@ -64,6 +64,9 @@ class Tab(start: Loc) {
     var loading by mutableStateOf(false)
     var error by mutableStateOf<String?>(null)
     var scrollKey by mutableIntStateOf(0)
+    /** keyboard cursor (focus ring) and the anchor for Shift-selection */
+    var cursor by mutableStateOf<String?>(null)
+    var anchor: String? = null
     var filter by mutableStateOf<Kind?>(null)
     val scrollMemo = HashMap<Loc, IntArray>()
     var job: kotlinx.coroutines.Job? = null
@@ -123,7 +126,11 @@ object AppState {
     var showSettings by mutableStateOf(false)
     var showWelcome by mutableStateOf(false)
     var showTopSheet by mutableStateOf(false)
+    /** phone tab switcher sheet */
+    var showTabs by mutableStateOf(false)
     var showDetails by mutableStateOf(false)
+    /** bumped by Ctrl+L so the address bar switches to edit mode */
+    var addressTick by mutableIntStateOf(0)
     var searching by mutableStateOf(false)
     var foreground = true
     private var jobIds = 1
@@ -188,7 +195,7 @@ object AppState {
 
     fun canUp(): Boolean = tab.loc !== Loc.Home
 
-    fun refresh() = load(tab)
+    fun refresh() { ChildCounts.clear(); load(tab) }
 
     // ------------------------------------------------------------------ loading
     fun sorted(list: List<FileEntry>): List<FileEntry> =
@@ -204,7 +211,7 @@ object AppState {
                     val showHidden = Settings.s.showHidden
                     val res = withContext(Dispatchers.IO) {
                         val f = File(loc.path)
-                        val l = FileOps.list(f, showHidden, true)
+                        val l = FileOps.list(f, showHidden, false)
                         if (l == null) null to (if (!f.exists()) "This folder no longer exists." else restrictionMessage(loc.path))
                         else sorted(l) to null
                     }
@@ -223,7 +230,7 @@ object AppState {
             Loc.Favorites -> {
                 t.loading = true
                 t.job = scope.launch {
-                    val l = withContext(Dispatchers.IO) { Settings.s.favorites.map { File(it) }.filter { it.exists() }.map { FileOps.entry(it, if (it.isDirectory) FileOps.countChildren(it, Settings.s.showHidden) else -1) } }
+                    val l = withContext(Dispatchers.IO) { Settings.s.favorites.map { File(it) }.filter { it.exists() }.map { FileOps.entry(it) } }
                     t.entries = sorted(l); t.loading = false
                 }
             }
@@ -264,7 +271,7 @@ object AppState {
                 val scanning = FileIndex.state.scanning
                 t.loading = scanning && l.isEmpty()
                 if (!scanning) break
-                delay(if (rounds++ < 3) 700 else 1500)
+                delay(if (rounds++ < 2) 1200 else 2500)
             }
             if (t.loc == loc) t.loading = false
         }
@@ -326,6 +333,7 @@ object AppState {
         if (removed.isNotEmpty()) FileIndex.remove(removed)
         if (added.isNotEmpty()) FileIndex.add(added)
         binVersion++
+        ChildCounts.clear()
         val parents = paths.map { Paths.parent(it) }.toSet() + paths.toSet()
         for (t in tabs) {
             val l = t.loc

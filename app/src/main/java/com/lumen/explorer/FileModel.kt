@@ -87,8 +87,12 @@ fun naturalCompare(a: String, b: String): Int {
             val la = ei - si
             val lb = ej - sj
             if (la != lb) return la.compareTo(lb)
-            val c = a.substring(si, ei).compareTo(b.substring(sj, ej))
-            if (c != 0) return c
+            var k = 0
+            while (k < la) {
+                val d = a[si + k].compareTo(b[sj + k])
+                if (d != 0) return d
+                k++
+            }
             i = ei
             j = ej
         } else {

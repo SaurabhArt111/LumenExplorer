@@ -35,6 +35,8 @@ object FileIndex {
 
     private val lists: Map<Cat, ArrayList<Rec>> = Cat.values().associateWith { ArrayList<Rec>() }
     private val lock = Any()
+    private var version = 0                       // bumped on every change; guarded by lock
+    private val cache = HashMap<Cat, Pair<Int, List<FileEntry>>>()
     private val generation = AtomicInteger(0)
     private const val CAP = 350_000
     private val skipDirs = setOf("Android/data", "Android/obb", ".thumbnails", ".LumenBin", ".trash", ".Trash", "LOST.DIR", "proc", "sys")
@@ -49,12 +51,16 @@ object FileIndex {
         else -> null
     }
 
+    /** Cached per category until the index changes (building 100k entries on every refresh was a big source of lag). */
     fun entries(cat: Cat): List<FileEntry> {
-        val snap = synchronized(lock) { ArrayList(lists.getValue(cat)) }
-        return snap.map { r ->
+        synchronized(lock) { cache[cat]?.let { if (it.first == version) return it.second } }
+        val (snap, v) = synchronized(lock) { ArrayList(lists.getValue(cat)) to version }
+        val list = snap.map { r ->
             val name = Paths.name(r.path)
             FileEntry(r.path, name, false, r.size, r.modified, Mime.kindOf(name, false), Paths.ext(name), name.startsWith("."))
         }
+        synchronized(lock) { cache[cat] = v to list }
+        return list
     }
 
     fun all(): List<FileEntry> = Cat.values().flatMap { entries(it) }
@@ -75,19 +81,25 @@ object FileIndex {
     fun remove(paths: Collection<String>) {
         if (paths.isEmpty()) return
         synchronized(lock) {
-            for (l in lists.values) l.removeAll { r -> paths.any { p -> r.path == p || r.path.startsWith("$p/") } }
+            val exact = paths.toHashSet()
+            val prefixes = paths.map { "$it/" }
+            for (l in lists.values) l.removeAll { r -> r.path in exact || prefixes.any { p -> r.path.startsWith(p) } }
+            version++
         }
         publish(false, state.finished)
     }
 
     fun add(entries: Collection<FileEntry>) {
+        val existing = HashMap<Cat, HashSet<String>>()
         synchronized(lock) {
             for (e in entries) {
                 if (e.isDir) continue
                 val c = catOf(e.kind) ?: continue
                 val l = lists.getValue(c)
-                if (l.none { it.path == e.path }) l.add(Rec(e.path, e.size, e.modified))
+                val known = existing.getOrPut(c) { l.mapTo(HashSet(l.size * 2)) { it.path } }
+                if (known.add(e.path)) l.add(Rec(e.path, e.size, e.modified))
             }
+            version++
         }
         publish(false, state.finished)
     }
@@ -113,7 +125,7 @@ object FileIndex {
             val fresh = Cat.values().associateWith { ArrayList<Rec>() }
             var count = 0
             var lastPublish = 0L
-            fun swapIn() { synchronized(lock) { for ((c, l) in fresh) { lists.getValue(c).apply { clear(); addAll(l) } } } }
+            fun swapIn() { synchronized(lock) { for ((c, l) in fresh) { lists.getValue(c).apply { clear(); addAll(l) } }; version++ } }
             fun add(path: String, size: Long, mod: Long) {
                 val name = Paths.name(path)
                 val cat = catOf(Mime.kindOf(name, false)) ?: return
@@ -124,28 +136,32 @@ object FileIndex {
                 if (fullAccess) {
                     val roots = Volumes.list.map { File(it.root) }.ifEmpty { listOf(android.os.Environment.getExternalStorageDirectory()) }
                     for (root in roots) {
-                        val rootLen = root.absolutePath.length
-                        val stack = ArrayDeque<File>()
-                        stack.addLast(root)
-                        while (stack.isNotEmpty()) {
-                            if (gen != generation.get()) return@Thread
-                            val dir = stack.removeLast()
-                            val kids = dir.listFiles() ?: continue
-                            for (f in kids) {
-                                val n = f.name
-                                if (n.startsWith(".")) continue
-                                if (f.isDirectory) {
-                                    val rel = f.absolutePath.substring(minOf(rootLen + 1, f.absolutePath.length))
-                                    if (rel in skipDirs || n in skipDirs) continue
-                                    stack.addLast(f)
-                                } else add(f.absolutePath, f.length(), f.lastModified())
+                        val rootPath = root.toPath()
+                        // walkFileTree gives size + mtime together with the directory entry: one stat per file instead of three
+                        val visitor = object : java.nio.file.SimpleFileVisitor<java.nio.file.Path>() {
+                            override fun preVisitDirectory(dir: java.nio.file.Path, attrs: java.nio.file.attribute.BasicFileAttributes): java.nio.file.FileVisitResult {
+                                if (gen != generation.get()) return java.nio.file.FileVisitResult.TERMINATE
+                                if (dir == rootPath) return java.nio.file.FileVisitResult.CONTINUE
+                                val n = dir.fileName?.toString() ?: return java.nio.file.FileVisitResult.CONTINUE
+                                if (n.startsWith(".") || n in skipDirs) return java.nio.file.FileVisitResult.SKIP_SUBTREE
+                                if (rootPath.relativize(dir).toString() in skipDirs) return java.nio.file.FileVisitResult.SKIP_SUBTREE
+                                return java.nio.file.FileVisitResult.CONTINUE
                             }
-                            val now = System.currentTimeMillis()
-                            if (now - lastPublish > 700) {
-                                lastPublish = now
-                                swapIn(); publish(true, false, count)
+                            override fun visitFile(file: java.nio.file.Path, attrs: java.nio.file.attribute.BasicFileAttributes): java.nio.file.FileVisitResult {
+                                val n = file.fileName?.toString() ?: return java.nio.file.FileVisitResult.CONTINUE
+                                if (!n.startsWith(".") && attrs.isRegularFile) add(file.toString(), attrs.size(), attrs.lastModifiedTime().toMillis())
+                                val now = System.currentTimeMillis()
+                                if (now - lastPublish > 1500) {
+                                    lastPublish = now
+                                    swapIn(); publish(true, false, count)
+                                    if (gen != generation.get()) return java.nio.file.FileVisitResult.TERMINATE
+                                }
+                                return java.nio.file.FileVisitResult.CONTINUE
                             }
+                            override fun visitFileFailed(file: java.nio.file.Path, exc: java.io.IOException): java.nio.file.FileVisitResult = java.nio.file.FileVisitResult.CONTINUE
                         }
+                        try { java.nio.file.Files.walkFileTree(rootPath, emptySet(), Int.MAX_VALUE, visitor) } catch (_: java.io.IOException) { }
+                        if (gen != generation.get()) return@Thread
                     }
                 } else {
                     queryMediaStore(app) { p, s, m -> add(p, s, m) }

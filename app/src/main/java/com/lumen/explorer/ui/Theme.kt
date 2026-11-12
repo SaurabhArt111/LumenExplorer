@@ -64,9 +64,7 @@ class WinColors(
     val accentSoft: Color,
     val danger: Color,
     val scrim: Color,
-) {
-    val textDim: Color get() = text2
-}
+)
 
 val AccentNames = listOf("Blue", "Teal", "Green", "Purple", "Pink", "Orange", "Red", "Graphite")
 private val AccentLight = listOf(0xFF0F6CBD, 0xFF00817A, 0xFF2E7D32, 0xFF6B4FBB, 0xFFC2185B, 0xFFD9660A, 0xFFC62828, 0xFF515A66).map { Color(it) }
@@ -76,12 +74,12 @@ fun accentSwatch(i: Int, dark: Boolean): Color = (if (dark) AccentDark else Acce
 private fun lightWin(a: Color) = WinColors(
     dark = false, bg = Color(0xFFF3F3F3), surface = Color(0xFFFFFFFF), card = Color(0xFFFFFFFF), hover = Color(0xFFEAEAEA),
     stroke = Color(0xFFE0E0E0), text = Color(0xFF1B1B1B), text2 = Color(0xFF616161), accent = a, onAccent = Color.White,
-    accentSoft = a.copy(alpha = 0.14f), danger = Color(0xFFC42B1C), scrim = Color(0x66000000),
+    accentSoft = a.copy(alpha = 0.14f), danger = Color(0xFFC42B1C), scrim = Color(0x52000000),
 )
 
 private fun darkWin(a: Color) = WinColors(
-    dark = true, bg = Color(0xFF202020), surface = Color(0xFF2B2B2B), card = Color(0xFF2D2D2D), hover = Color(0xFF383838),
-    stroke = Color(0xFF3F3F3F), text = Color(0xFFF2F2F2), text2 = Color(0xFFA6A6A6), accent = a, onAccent = Color(0xFF0A0A0A),
+    dark = true, bg = Color(0xFF202020), surface = Color(0xFF2B2B2B), card = Color(0xFF303030), hover = Color(0xFF3A3A3A),
+    stroke = Color(0xFF424242), text = Color(0xFFF2F2F2), text2 = Color(0xFFA6A6A6), accent = a, onAccent = Color(0xFF0A0A0A),
     accentSoft = a.copy(alpha = 0.20f), danger = Color(0xFFFF8A80), scrim = Color(0x99000000),
 )
 

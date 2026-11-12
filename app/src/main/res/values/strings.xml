@@ -1,7 +1,7 @@
 <resources>
     <string name="app_name">Lumen Explorer</string>
-    <string name="bio_title">Biometric Unlock</string>
-    <string name="bio_subtitle">Confirm biometrics to continue</string>
+    <string name="bio_title">Unlock Vault</string>
+    <string name="bio_subtitle">Use your biometric credential to unlock</string>
     <string name="bio_cancel">Cancel</string>
     <string name="press_back_again">Press back again to exit</string>
 </resources>

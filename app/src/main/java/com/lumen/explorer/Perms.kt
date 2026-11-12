@@ -20,9 +20,7 @@ object Perms {
         private set
     var skipped by mutableStateOf(false)
 
-    fun refresh(ctx: Context? = null) { tick++ }
-
-    fun needsAllFilesStep(): Boolean = Build.VERSION.SDK_INT >= 30
+    fun refresh() { tick++ }
 
     fun hasAllFiles(ctx: Context): Boolean =
         if (Build.VERSION.SDK_INT >= 30) Environment.isExternalStorageManager()
@@ -31,8 +29,6 @@ object Perms {
     fun hasMedia(ctx: Context): Boolean =
         if (Build.VERSION.SDK_INT >= 33) granted(ctx, Manifest.permission.READ_MEDIA_IMAGES) && granted(ctx, Manifest.permission.READ_MEDIA_VIDEO) && granted(ctx, Manifest.permission.READ_MEDIA_AUDIO)
         else granted(ctx, Manifest.permission.READ_EXTERNAL_STORAGE)
-
-    fun hasRuntime(ctx: Context): Boolean = hasMedia(ctx)
 
     fun canInstall(ctx: Context): Boolean = if (Build.VERSION.SDK_INT >= 26) ctx.packageManager.canRequestPackageInstalls() else true
 
@@ -49,17 +45,11 @@ object Perms {
 
     fun mediaPermissions(): Array<String> = runtimePermissions()
 
-    fun allFilesIntent(ctx: Context): Intent =
-        Intent(AndroidSettings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, Uri.parse("package:${ctx.packageName}"))
-
-    fun allFilesFallbackIntent(): Intent =
-        Intent(AndroidSettings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)
-
     fun allFilesIntents(ctx: Context): List<Intent> {
         val uri = Uri.parse("package:${ctx.packageName}")
         return listOf(
-            allFilesIntent(ctx),
-            allFilesFallbackIntent(),
+            Intent(AndroidSettings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, uri),
+            Intent(AndroidSettings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION),
             Intent(AndroidSettings.ACTION_APPLICATION_DETAILS_SETTINGS, uri),
         )
     }
